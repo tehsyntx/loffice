@@ -1,5 +1,4 @@
-# loffice
-Lazy Office Analyzer
+# loffice - Lazy Office Analyzer
 
 Requirements:
 - Microsoft Office (32-bit)
