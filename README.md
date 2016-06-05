@@ -1,0 +1,2 @@
+# loffice
+Lazy Office Analyzer
