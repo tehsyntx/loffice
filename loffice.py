@@ -48,15 +48,17 @@ def cb_createprocessw(event):
 	proc = event.get_process()
 	thread  = event.get_thread()
 
-	lpApplicationName = thread.read_stack_dwords(2)[1]
-		
-	print 'CREATE PROCESS\n\t%s\n' % proc.peek_string(lpApplicationName, fUnicode=True)
+	lpApplicationName, lpCommandLine = thread.read_stack_dwords(3)[1:]
+	application = proc.peek_string(lpApplicationName, fUnicode=True)
+	cmdline = proc.peek_string(lpCommandLine, fUnicode=True)
+
+	print 'CREATE PROCESS\n\tApp: "%s"\n\tCmd-line: "%s"\n' % (application, cmdline)		
 	
-	if exit_on == 'url':
+	if exit_on == 'url' and 'splwow64' not in application:
 		print 'Process created before URL was found, exiting for safety'
 		sys.exit()
 		
-	if exit_on == 'proc':
+	if exit_on == 'proc' and 'splwow64' not in application:
 		print 'Exiting on process creation, bye!'
 		sys.exit()
 
