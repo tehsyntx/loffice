@@ -62,7 +62,42 @@ def cb_createprocessw(event):
 		print 'Exiting on process creation, bye!'
 		sys.exit()
 
-		
+def cb_stubclient20(event):
+
+	proc = event.get_process()
+	thread  = event.get_thread()
+
+	print 'DETECTED WMI QUERY'
+
+	strQueryLanguage, strQuery = thread.read_stack_dwords(4)[2:]
+
+	language = proc.peek_string(strQueryLanguage, fUnicode=True)
+	query = proc.peek_string(strQuery, fUnicode=True)
+
+	print '\tLanguage: %s' % language
+	print '\tQuery: %s' % query
+
+	if 'win32_product' in query.lower() or 'win32_process' in query.lower():
+
+		if '=' in query or 'like' in query.lower():
+			decoy = "SELECT Name FROM Win32_Fan WHERE Name='1'"
+		else:
+			decoy = "SELECT Name FROM Win32_Fan"
+
+		i = len(decoy)
+
+		for c in decoy:
+			proc.write_char(strQuery + (i - len(decoy)), ord(c))
+			i += 2
+
+		proc.write_char(strQuery + (len(decoy) * 2), 0x00)
+		proc.write_char(strQuery + (len(decoy) * 2) + 1, 0x00) # Ensure UNICODE string termination
+
+		patched_query = proc.peek_string(strQuery, fUnicode=True)
+
+		print '\tPatched with: %s' % patched_query
+
+
 class EventHandler(EventHandler):
 
 	def load_dll(self, event):
@@ -81,11 +116,14 @@ class EventHandler(EventHandler):
 			address = module.resolve("InternetCrackUrlW")
 			event.debug.break_at(pid, address, cb_crackurl)
 
-
 		if module.match_name("winhttp.dll"):
 			address = module.resolve("WinHttpCrackUrl")
 			event.debug.break_at(pid, address, cb_crackurl)
-			
+
+		if module.match_name("ole32.dll"):
+			address = module.resolve("ObjectStublessClient20")
+			event.debug.break_at(pid, address, cb_stubclient20)
+
 		
 def usage():
 
@@ -140,6 +178,7 @@ if __name__ == "__main__":
 	with Debug(EventHandler(), bKillOnExit = True) as debug:
 		debug.execv(args)
 		try:
+			print 'Launching...\n'
 			debug.loop()
 		except KeyboardInterrupt:
 			print 'Exiting, bye!'

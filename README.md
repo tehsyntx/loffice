@@ -6,7 +6,8 @@ Requirements:
 - WinAppDbg - http://winappdbg.sourceforge.net/
 - Python 2.7 
 
-Loffice is making use of WinAppDbg to extract URLs' from Office documents but also VB-script and Javascipt. By setting strategical breakpoints it's possible to neutralize obfuscation and get the URL and file destination.
+Loffice is making use of WinAppDbg to extract URLs' from Office documents but also VB-script and Javascript. By setting strategical breakpoints it's possible to neutralize obfuscation and get the URL and file destination.
+Anti-analysis via WMI, for example detecting running processes or installed software is handled by patching the query string before the query is run.
 
 Loffice have three different exit-modes which determine if execution is to be aborted:
 - url - Exit when the first URL is found
