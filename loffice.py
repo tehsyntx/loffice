@@ -114,40 +114,19 @@ class EventHandler(EventHandler):
 		module = event.get_module()
 		pid = event.get_pid()
 
-		if module.match_name("kernel32.dll"):
-			address = module.resolve("CreateProcessW")
-			try:
-				event.debug.break_at(pid, address, cb_createprocessw)
-			except:
-				logger.error('Could not break at: CreateProcessW')
+		def setup_breakpoint(modulename, function, callback):
+			if module.match_name(modulename + '.dll'):
+				address = module.resolve(function)
+				try:
+					event.debug.break_at(pid, address, callback)
+				except:
+					logger.error('Could not break at: %s!%s' % (modulename, function))
 
-			address = module.resolve("CreateFileW")
-			try:
-				event.debug.break_at(pid, address, cb_createfilew)
-			except:
-				logger.error('Could not break at: CreateFileW')
-			
-		if module.match_name("wininet.dll"):
-			address = module.resolve("InternetCrackUrlW")
-			try:
-				event.debug.break_at(pid, address, cb_crackurl)
-			except:
-				logger.error('Could not break at: InternetCrackUrlW')
-
-		if module.match_name("winhttp.dll"):
-			address = module.resolve("WinHttpCrackUrl")
-			try:
-				event.debug.break_at(pid, address, cb_crackurl)
-			except:
-				logger.error('Could not break at: WinHttpCrackUrl')
-
-		if module.match_name("ole32.dll"):
-			address = module.resolve("ObjectStublessClient20")
-			try:
-				event.debug.break_at(pid, address, cb_stubclient20)
-			except:
-				logger.error('Could not break at: ObjectStublessClient20')
-
+		setup_breakpoint('kernel32', 'CreateProcessW', cb_createprocessw)
+		setup_breakpoint('kernel32', 'CreateFileW', cb_createfilew)
+		setup_breakpoint('wininet', 'InternetCrackUrlW', cb_crackurl)
+		setup_breakpoint('winhttp', 'WinHttpCrackUrl', cb_crackurl)
+		setup_breakpoint('ole32', 'ObjectStublessClient20', cb_stubclient20)
 
 def options():
 
