@@ -154,6 +154,10 @@ Exit-on:
 
 	opts, args = parser.parse_args()
 
+	if len(args) < 3:
+		parser.print_help()
+		sys.exit(0)
+
 	if not os.path.exists(opts.path):
 		logger.error('Specified Office path does not exists: "%s"' % opts.path)
 		sys.exit(1)
