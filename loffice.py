@@ -16,7 +16,7 @@ import sys
 import os
 
 # Root path to Microsoft Office
-OFFICE_PATH = 'C:\\Program Files\\Microsoft Office\\Office14\\'
+OFFICE_PATH = 'C:\\Program Files\\Microsoft Office\\Office15\\'
 
 def cb_crackurl(event):
 	
@@ -107,22 +107,37 @@ class EventHandler(EventHandler):
 
 		if module.match_name("kernel32.dll"):
 			address = module.resolve("CreateProcessW")
-			event.debug.break_at(pid, address, cb_createprocessw)
+			try:
+				event.debug.break_at(pid, address, cb_createprocessw)
+			except:
+				print '[?] Could not break at CreateProcessW'
 
 			address = module.resolve("CreateFileW")
-			event.debug.break_at(pid, address, cb_createfilew)
+			try:
+				event.debug.break_at(pid, address, cb_createfilew)
+			except:
+				print '[?] Could not break at CreateFileW'
 			
 		if module.match_name("wininet.dll"):
 			address = module.resolve("InternetCrackUrlW")
-			event.debug.break_at(pid, address, cb_crackurl)
+			try:
+				event.debug.break_at(pid, address, cb_crackurl)
+			except:
+				print '[?] Could not break at InternetCrackUrlW'
 
 		if module.match_name("winhttp.dll"):
 			address = module.resolve("WinHttpCrackUrl")
-			event.debug.break_at(pid, address, cb_crackurl)
+			try:
+				event.debug.break_at(pid, address, cb_crackurl)
+			except:
+				print '[?] Could not break at WinHttpCrackUrl'
 
 		if module.match_name("ole32.dll"):
 			address = module.resolve("ObjectStublessClient20")
-			event.debug.break_at(pid, address, cb_stubclient20)
+			try:
+				event.debug.break_at(pid, address, cb_stubclient20)
+			except:
+				print '[?] Could not break at ObjectStublessClient20'
 
 		
 def usage():
@@ -155,7 +170,7 @@ if __name__ == "__main__":
 	elif sys.argv[1] == 'word':
 		args.append('%s\\WINWORD.EXE' % OFFICE_PATH)
 	elif sys.argv[1] == 'excel':
-		args.append('%s\\EXCEL.EXE %s' % OFFICE_PATH)
+		args.append('%s\\EXCEL.EXE' % OFFICE_PATH)
 	elif sys.argv[1] == 'power':
 		args.append('%s\\POWERPNT.EXE' % OFFICE_PATH)
 	else:
