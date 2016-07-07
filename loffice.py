@@ -130,13 +130,14 @@ class EventHandler(EventHandler):
 
 def options():
 
-	valid_types = ['word', 'excel', 'power', 'script']
+	valid_types = ['auto', 'word', 'excel', 'power', 'script']
 	valid_exit_ons = ['url', 'proc', 'none']
 
 	usage = '''
 	%prog [options] <type> <exit-on> <filename>
 	
 Type:
+	auto   - Automatically detect program to launch
 	word   - Word document
 	excel  - Excel spreadsheet
 	power  - Powerpoint document
@@ -177,6 +178,44 @@ Exit-on:
 	return (opts, args)
 
 
+def setup_office_path(opts, args):
+
+	prog = args[0]
+
+	def auto_ext(exts, type_):
+		for ext in exts:
+			if args[2].endswith(ext):
+				return type_
+		return False
+
+	if prog == 'auto':
+		docs = ['doc', 'docx', 'docm']
+		excel = ['xls', 'xlsx', 'xlsm']
+		ppt = ['ppt', 'pptx', 'pptm']
+		script = ['js', 'vbs']
+
+		p = auto_ext(docs, 'WINWORD')
+		if not p:
+			p = auto_ext(excel, 'EXCEL')
+			if not p:
+				p = auto_ext(ppt, 'POWERPNT')
+				if not p:
+					p = auto_ext(script, 'system32\\wscript')
+					if not p:
+						logger.error('Unrecognized file!')
+						sys.exit(1)
+		logger.debug('Auto-detected program to launch: "%s.exe"' % p)
+		return '%s\\%s.exe' % (opts.path, p)
+	
+	if args[0] == 'script':
+		return '%s\\system32\\wscript.exe' % os.environ['WINDIR']
+	elif args[0] == 'word':
+		return '%s\\WINWORD.EXE' % opts.path
+	elif args[0] == 'excel':
+		return '%s\\EXCEL.EXE' % opts.path
+	elif args[0] == 'power':
+		return '%s\\POWERPNT.EXE' % opts.path
+
 if __name__ == "__main__":
 
 	(opts, args) = options()
@@ -184,17 +223,7 @@ if __name__ == "__main__":
 	logger.info('\n\tLazy Office Analyzer - Analyze documents with WinDbg\n')
 
 	office_invoke = []
-	if args[0] == 'script':
-		office_invoke.append('%s\\system32\\wscript.exe' % os.environ['WINDIR'])
-	elif args[0] == 'word':
-		office_invoke.append('%s\\WINWORD.EXE' % opts.path)
-	elif args[0] == 'excel':
-		office_invoke.append('%s\\EXCEL.EXE' % opts.path)
-	elif args[0] == 'power':
-		office_invoke.append('%s\\POWERPNT.EXE' % opts.path)
-	else:
-		print 'Unsupported type: %s' % args[0]
-		sys.exit(1)
+	office_invoke.append(setup_office_path(opts, args))
 
 	logger.debug('Using office path:')
 	logger.debug('\t"%s"' % office_invoke[0])
