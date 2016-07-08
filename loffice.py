@@ -17,14 +17,16 @@ import os
 import optparse
 import logging
 
+# Setting up logger facilities.
 logging.basicConfig(format='%(levelname)s%(message)s')
 logging.addLevelName( logging.INFO, '')
 logging.addLevelName( logging.DEBUG, '[%s] ' % logging.getLevelName(logging.DEBUG))
 logging.addLevelName( logging.ERROR, '[%s] ' % logging.getLevelName(logging.ERROR))
 logger = logging.getLogger()
 
-# Root path to Microsoft Office
-DEFAULT_OFFICE_PATH = 'C:\\Program Files\\Microsoft Office\\Office15'
+
+# Root path to Microsoft Office suite.
+DEFAULT_OFFICE_PATH = os.environ['PROGRAMFILES'] + '\\Microsoft Office\\Office15'
 
 
 def cb_crackurl(event):
@@ -40,7 +42,6 @@ def cb_crackurl(event):
 		logger.info('Exiting on first URL, bye!')
 		sys.exit()
 
-		
 def cb_createfilew(event):
 
 	proc = event.get_process()
@@ -48,9 +49,13 @@ def cb_createfilew(event):
 	
 	lpFileName, dwDesiredAccess = thread.read_stack_dwords(3)[1:]
 
-	if dwDesiredAccess == 0x80000100:
-		logger.info('OPEN FILE HANDLE\n\t%s\n' % (proc.peek_string(lpFileName, fUnicode=True)))
+	access = ''
+	if dwDesiredAccess & 0x80000000: access += 'R'
+	if dwDesiredAccess & 0x40000000: access += 'W'
+	if dwDesiredAccess & 0x20000000: access += 'X'
+	if dwDesiredAccess == 0x10000000:access = 'RWX'
 
+	logger.info('Opened file (access: %s):\n\t%s\n' % (access, proc.peek_string(lpFileName, fUnicode=True)))
 		
 def cb_createprocessw(event):
 
@@ -61,10 +66,10 @@ def cb_createprocessw(event):
 	application = proc.peek_string(lpApplicationName, fUnicode=True)
 	cmdline = proc.peek_string(lpCommandLine, fUnicode=True)
 
-	logger.info('CREATE PROCESS\n\tApp: "%s"\n\tCmd-line: "%s"\n' % (application, cmdline))
+	logger.info('CREATE PROCESS\n\tApp: "%s"\n\tCommand line: "%s"\n' % (application, cmdline))
 	
 	if exit_on == 'url' and 'splwow64' not in application:
-		logger.info('Process created before URL was found, exiting for safety')
+		logger.info('Process created before URL was found, exiting for safety.')
 		sys.exit()
 		
 	if exit_on == 'proc' and 'splwow64' not in application:
@@ -104,7 +109,7 @@ def cb_stubclient20(event):
 
 		patched_query = proc.peek_string(strQuery, fUnicode=True)
 
-		logger.info('\tPatched with: %s' % patched_query)
+		logger.info('\tPatched with: "%s"' % patched_query)
 
 
 class EventHandler(EventHandler):
@@ -188,15 +193,15 @@ def setup_office_path(opts, args):
 
 	def auto_ext(exts, type_):
 		for ext in exts:
-			if args[2].endswith(ext):
+			if args[2].endswith('.' + ext):
 				return type_
 		return False
 
 	if prog == 'auto':
-		docs = ['doc', 'docx', 'docm']
-		excel = ['xls', 'xlsx', 'xlsm']
-		ppt = ['ppt', 'pptx', 'pptm']
-		script = ['js', 'vbs']
+		docs = ['doc', 'docx', 'docm', 'dot', 'dotx', 'docb', 'dotm']
+		excel = ['xls', 'xlsx', 'xlsm', 'xlt', 'xlm', 'xltx', 'xltm', 'xlsb', 'xla', 'xlw', 'xlam']
+		ppt = ['ppt', 'pptx', 'pptm', 'pot', 'pps', 'potx', 'potm', 'ppam', 'ppsx', 'sldx', 'sldm']
+		script = ['js', 'jse', 'vbs', 'vbe', 'vb']
 
 		p = auto_ext(docs, 'WINWORD')
 		if not p:
