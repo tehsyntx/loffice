@@ -24,13 +24,13 @@ logging.addLevelName( logging.DEBUG, '[%s] ' % logging.getLevelName(logging.DEBU
 logging.addLevelName( logging.ERROR, '[%s] ' % logging.getLevelName(logging.ERROR))
 logger = logging.getLogger()
 
+opened_registry_keys = {}
 
 # Root path to Microsoft Office suite.
 DEFAULT_OFFICE_PATH = os.environ['PROGRAMFILES'] + '\\Microsoft Office\\Office15'
 
 
 def cb_crackurl(event):
-	
 	proc = event.get_process()
 	thread  = event.get_thread()
 
@@ -43,7 +43,6 @@ def cb_crackurl(event):
 		sys.exit()
 
 def cb_createfilew(event):
-
 	proc = event.get_process()
 	thread = event.get_thread()
 	
@@ -58,7 +57,6 @@ def cb_createfilew(event):
 	logger.info('Opened file (access: %s):\n\t%s\n' % (access, proc.peek_string(lpFileName, fUnicode=True)))
 		
 def cb_createprocessw(event):
-
 	proc = event.get_process()
 	thread  = event.get_thread()
 
@@ -76,8 +74,61 @@ def cb_createprocessw(event):
 		logger.info('Exiting on process creation, bye!')
 		sys.exit()
 
-def cb_stubclient20(event):
+def cb_regsetvalueexw(event):
+	proc = event.get_process()
+	thread  = event.get_thread()
 
+	hkey, lpValueName, _, dwType, lpData, cbData = thread.read_stack_dwords(7)[1:]
+
+	# reg_sz = 1, reg_expand_sz = 2
+	if dwType == 1 or dwType == 2:
+		valuename = proc.peek_string(lpValueName, fUnicode=True)
+		data = proc.peek_string(lpData, fUnicode=True)
+
+		# TODO: Implement obtaining full registry path from given hkey.
+		#		SHGetRegPath, NtQuerySystemInformation(..., SystemHandleInformation, ...), NtQueryKey(...), etc.
+
+		path = ''
+		if hkey in opened_registry_keys.keys():
+			path = opened_registry_keys[hkey] + '\\' + valuename
+		else:
+			path = valuename
+
+		print 'RegSetValue hkey=%X' % hkey
+		logger.info('REGISTRY MODIFICATION\n\tRegistry path: "%s"\n\tData: "%s"\n' % (path, data))
+
+def add_path_to_opened_keys_list(hkey, result, path):
+	global opened_registry_keys
+
+	if result not in opened_registry_keys.keys():
+		if hkey in opened_registry_keys.keys():
+			p = opened_registry_keys[hkey]
+			opened_registry_keys[result] = p + '\\' + path
+			print 'Adding hkey=%X, result=%X, path=%s' % (hkey, result, path)
+		else:
+			opened_registry_keys[result] = path
+			print 'Adding2 hkey=%X, result=%X, path=%s' % (hkey, result, path)
+
+def cb_regcreatekeyexw(event):
+	proc = event.get_process()
+	thread  = event.get_thread()
+
+	hkey, lpSubKey, _, lpClass, _, _, _, phkResult = thread.read_stack_dwords(9)[1:]
+	path = proc.peek_string(lpSubKey, fUnicode=True)
+	if hkey < 0x1000: print 'RegCreate hkey=%X' % hkey
+	add_path_to_opened_keys_list(hkey, result, path)
+
+def cb_regopenkeyexw(event):
+	proc = event.get_process()
+	thread  = event.get_thread()
+
+	hkey, lpSubKey, _, _, phkResult = thread.read_stack_dwords(6)[1:]
+	path = proc.peek_string(lpSubKey, fUnicode=True)
+	if hkey < 0x1000: print 'RegOpen hkey=%X' % hkey
+	add_path_to_opened_keys_list(hkey, result, path)
+
+
+def cb_stubclient20(event):
 	proc = event.get_process()
 	thread  = event.get_thread()
 
@@ -129,9 +180,14 @@ class EventHandler(EventHandler):
 
 		setup_breakpoint('kernel32', 'CreateProcessW', cb_createprocessw)
 		setup_breakpoint('kernel32', 'CreateFileW', cb_createfilew)
+		#setup_breakpoint('advapi32', 'RegSetValueExW', cb_regsetvalueexw)
+		#setup_breakpoint('advapi32', 'RegCreateKeyExW', cb_regcreatekeyexw)
+		#setup_breakpoint('advapi32', 'RegOpenKeyExW', cb_regopenkeyexw)
 		setup_breakpoint('wininet', 'InternetCrackUrlW', cb_crackurl)
 		setup_breakpoint('winhttp', 'WinHttpCrackUrl', cb_crackurl)
 		setup_breakpoint('ole32', 'ObjectStublessClient20', cb_stubclient20)
+
+	def post_RegCreateKeyExW( self, event, retval ):
 
 def options():
 
