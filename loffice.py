@@ -11,17 +11,19 @@ Requirements:
 Author: @tehsyntx
 """
 
-from winappdbg import Debug, EventHandler
+from winappdbg import win32, Debug, EventHandler
 import sys
 import os
 import optparse
 import logging
+import mimetypes
 
 # Setting up logger facilities.
 logging.basicConfig(format='%(levelname)s%(message)s')
 logging.addLevelName( logging.INFO, '')
 logging.addLevelName( logging.DEBUG, '[%s] ' % logging.getLevelName(logging.DEBUG))
 logging.addLevelName( logging.ERROR, '[%s] ' % logging.getLevelName(logging.ERROR))
+logging.addLevelName( logging.WARNING, '[%s] ' % logging.getLevelName(logging.WARNING))
 logger = logging.getLogger()
 
 opened_registry_keys = {}
@@ -94,38 +96,7 @@ def cb_regsetvalueexw(event):
 		else:
 			path = valuename
 
-		print 'RegSetValue hkey=%X' % hkey
 		logger.info('REGISTRY MODIFICATION\n\tRegistry path: "%s"\n\tData: "%s"\n' % (path, data))
-
-def add_path_to_opened_keys_list(hkey, result, path):
-	global opened_registry_keys
-
-	if result not in opened_registry_keys.keys():
-		if hkey in opened_registry_keys.keys():
-			p = opened_registry_keys[hkey]
-			opened_registry_keys[result] = p + '\\' + path
-			print 'Adding hkey=%X, result=%X, path=%s' % (hkey, result, path)
-		else:
-			opened_registry_keys[result] = path
-			print 'Adding2 hkey=%X, result=%X, path=%s' % (hkey, result, path)
-
-def cb_regcreatekeyexw(event):
-	proc = event.get_process()
-	thread  = event.get_thread()
-
-	hkey, lpSubKey, _, lpClass, _, _, _, phkResult = thread.read_stack_dwords(9)[1:]
-	path = proc.peek_string(lpSubKey, fUnicode=True)
-	if hkey < 0x1000: print 'RegCreate hkey=%X' % hkey
-	add_path_to_opened_keys_list(hkey, result, path)
-
-def cb_regopenkeyexw(event):
-	proc = event.get_process()
-	thread  = event.get_thread()
-
-	hkey, lpSubKey, _, _, phkResult = thread.read_stack_dwords(6)[1:]
-	path = proc.peek_string(lpSubKey, fUnicode=True)
-	if hkey < 0x1000: print 'RegOpen hkey=%X' % hkey
-	add_path_to_opened_keys_list(hkey, result, path)
 
 
 def cb_stubclient20(event):
@@ -174,20 +145,25 @@ class EventHandler(EventHandler):
 			if module.match_name(modulename + '.dll'):
 				address = module.resolve(function)
 				try:
-					event.debug.break_at(pid, address, callback)
+					if address:
+						event.debug.break_at(pid, address, callback)
+					else:
+						logger.warning("Couldn't resolve or address not belong to module: %s!%s" % (modulename, function))
 				except:
-					logger.error('Could not break at: %s!%s' % (modulename, function))
+					logger.error('Could not break at: %s!%s.' % (modulename, function))
 
 		setup_breakpoint('kernel32', 'CreateProcessW', cb_createprocessw)
 		setup_breakpoint('kernel32', 'CreateFileW', cb_createfilew)
-		#setup_breakpoint('advapi32', 'RegSetValueExW', cb_regsetvalueexw)
-		#setup_breakpoint('advapi32', 'RegCreateKeyExW', cb_regcreatekeyexw)
-		#setup_breakpoint('advapi32', 'RegOpenKeyExW', cb_regopenkeyexw)
 		setup_breakpoint('wininet', 'InternetCrackUrlW', cb_crackurl)
 		setup_breakpoint('winhttp', 'WinHttpCrackUrl', cb_crackurl)
 		setup_breakpoint('ole32', 'ObjectStublessClient20', cb_stubclient20)
+		
+		# Development in progress...
+		#setup_breakpoint('advapi32', 'RegSetValueExW', cb_regsetvalueexw)
+
 
 	def post_RegCreateKeyExW( self, event, retval ):
+		pass
 
 def options():
 
@@ -243,60 +219,81 @@ Exit-on:
 	return (opts, args)
 
 
-def setup_office_path(opts, args):
+def setup_office_path(prog, filename, office_path):
 
-	prog = args[0]
-
-	def auto_ext(exts, type_):
+	def detect_ext(exts, type_):
 		for ext in exts:
-			if args[2].endswith('.' + ext):
+			if filename.endswith('.' + ext):
 				return type_
-		return False
+		return None
 
 	if prog == 'auto':
-		docs = ['doc', 'docx', 'docm', 'dot', 'dotx', 'docb', 'dotm']
-		excel = ['xls', 'xlsx', 'xlsm', 'xlt', 'xlm', 'xltx', 'xltm', 'xlsb', 'xla', 'xlw', 'xlam']
-		ppt = ['ppt', 'pptx', 'pptm', 'pot', 'pps', 'potx', 'potm', 'ppam', 'ppsx', 'sldx', 'sldm']
-		script = ['js', 'jse', 'vbs', 'vbe', 'vb']
 
-		p = auto_ext(docs, 'WINWORD')
-		if not p:
-			p = auto_ext(excel, 'EXCEL')
+		# Stage 1: Let the Mime detect file type.
+		guessed = mimetypes.MimeTypes().guess_type(filename)
+		p = None
+
+		if 'msword' in guessed or 'officedocument.wordprocessing' in guessed:
+			p = 'WINWORD'
+		elif 'ms-excel' in guessed or 'officedocument.spreadsheet' in guessed:
+			p = 'EXCEL'
+		elif 'ms-powerpoint' in guessed or 'officedocument.presentation' in guessed:
+			p = 'POWERPNT'
+
+
+		# Stage 2: Detect based on extension
+		if p == None:
+			word = ['doc', 'docx', 'docm', 'dot', 'dotx', 'docb', 'dotm']
+			#word_patterns = ['MSWordDoc', 'Word.Document', 'word/_rels/document', 'word/font']
+			excel = ['xls', 'xlsx', 'xlsm', 'xlt', 'xlm', 'xltx', 'xltm', 'xlsb', 'xla', 'xlw', 'xlam']
+			#excel_patterns = ['xl/_rels/workbook', 'xl/worksheets/', 'Microsoft Excel', 'Excel.Sheet']
+			ppt = ['ppt', 'pptx', 'pptm', 'pot', 'pps', 'potx', 'potm', 'ppam', 'ppsx', 'sldx', 'sldm']
+			#ppt_patterns = ['drs/shapexml.xml', 'Office PowerPoint', 'ppt/slideLayouts', 'ppt/presentation']
+			script = ['js', 'jse', 'vbs', 'vbe', 'vb']
+
+			p = detect_ext(word, 'WINWORD')
 			if not p:
-				p = auto_ext(ppt, 'POWERPNT')
+				p = detect_ext(excel, 'EXCEL')
 				if not p:
-					p = auto_ext(script, 'system32\\wscript')
+					p = detect_ext(ppt, 'POWERPNT')
 					if not p:
-						logger.error('Unrecognized file!')
-						sys.exit(1)
+						p = detect_ext(script, 'system32\\wscript')
+		
+		if p == None:
+			logger.error('Failed to detect file\'s type!')
+			sys.exit(1)
+
 		logger.debug('Auto-detected program to launch: "%s.exe"' % p)
-		return '%s\\%s.exe' % (opts.path, p)
+		return '%s\\%s.exe' % (office_path, p)
 	
 	if args[0] == 'script':
 		return '%s\\system32\\wscript.exe' % os.environ['WINDIR']
 	elif args[0] == 'word':
-		return '%s\\WINWORD.EXE' % opts.path
+		return '%s\\WINWORD.EXE' % office_path
 	elif args[0] == 'excel':
-		return '%s\\EXCEL.EXE' % opts.path
+		return '%s\\EXCEL.EXE' % office_path
 	elif args[0] == 'power':
-		return '%s\\POWERPNT.EXE' % opts.path
+		return '%s\\POWERPNT.EXE' % office_path
 
 if __name__ == "__main__":
 
+	global exit_on
+
 	(opts, args) = options()
+	prog = args[0]
+	exit_on = args[1]
+	filename = args[2]
 
 	logger.info('\n\tLazy Office Analyzer - Analyze documents with WinDbg\n')
 
 	office_invoke = []
-	office_invoke.append(setup_office_path(opts, args))
+	office_invoke.append(setup_office_path(prog, filename, opts.path))
 
 	logger.debug('Using office path:')
 	logger.debug('\t"%s"' % office_invoke[0])
 		
-	global exit_on
-	exit_on = args[1]
 		
-	office_invoke.append(args[2]) # Document to analyze
+	office_invoke.append(filename) # Document to analyze
 
 	logger.debug('Invocation command:')
 	logger.debug('\t"%s"' % ' '.join(office_invoke))
