@@ -26,8 +26,6 @@ logging.addLevelName( logging.ERROR, '[%s] ' % logging.getLevelName(logging.ERRO
 logging.addLevelName( logging.WARNING, '[%s] ' % logging.getLevelName(logging.WARNING))
 logger = logging.getLogger()
 
-opened_registry_keys = {}
-
 # Root path to Microsoft Office suite.
 DEFAULT_OFFICE_PATH = os.environ['PROGRAMFILES'] + '\\Microsoft Office\\Office15'
 
@@ -90,12 +88,7 @@ def cb_regsetvalueexw(event):
 		# TODO: Implement obtaining full registry path from given hkey.
 		#		SHGetRegPath, NtQuerySystemInformation(..., SystemHandleInformation, ...), NtQueryKey(...), etc.
 
-		path = ''
-		if hkey in opened_registry_keys.keys():
-			path = opened_registry_keys[hkey] + '\\' + valuename
-		else:
-			path = valuename
-
+    path = valuename
 		logger.info('REGISTRY MODIFICATION\n\tRegistry path: "%s"\n\tData: "%s"\n' % (path, data))
 
 
