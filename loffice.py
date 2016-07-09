@@ -259,13 +259,13 @@ def setup_office_path(prog, filename, office_path):
 		logger.debug('Auto-detected program to launch: "%s.exe"' % p)
 		return '%s\\%s.exe' % (office_path, p)
 	
-	if args[0] == 'script':
+	if prog == 'script':
 		return '%s\\system32\\wscript.exe' % os.environ['WINDIR']
-	elif args[0] == 'word':
+	elif prog == 'word':
 		return '%s\\WINWORD.EXE' % office_path
-	elif args[0] == 'excel':
+	elif prog == 'excel':
 		return '%s\\EXCEL.EXE' % office_path
-	elif args[0] == 'power':
+	elif prog == 'power':
 		return '%s\\POWERPNT.EXE' % office_path
 
 if __name__ == "__main__":
@@ -284,7 +284,6 @@ if __name__ == "__main__":
 
 	logger.debug('Using office path:')
 	logger.debug('\t"%s"' % office_invoke[0])
-		
 		
 	office_invoke.append(filename) # Document to analyze
 
