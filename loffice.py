@@ -56,8 +56,10 @@ def cb_createfilew(event):
 	if dwDesiredAccess & 0x80000000: access += 'R'
 	if dwDesiredAccess & 0x40000000: access += 'W'
 
-	if access is not '':
-		logger.info('Opened file (access: %s):\n\t%s\n' % (access, proc.peek_string(lpFileName, fUnicode=True)))
+	filename = proc.peek_string(lpFileName, fUnicode=True)
+
+	if access is not '' and (writes_only and 'W' in access) and '\\\\' not in filename[:2]: # Exclude PIPE and WMIDataDevice
+		logger.info('Opened file (access: %s):\n\t%s\n' % (access, filename))
 
 
 def cb_createprocessw(event):
@@ -179,6 +181,7 @@ Exit-on:
 '''
 	parser = optparse.OptionParser(usage=usage)
 	parser.add_option('-v', '--verbose', dest='verbose', help='Verbose mode.', action='store_true')
+	parser.add_option('-w', '--writes-only', dest='writes_only', help='Log file writes only (exclude reads)', action='store_true')
 	parser.add_option('-p', '--path', dest='path', help='Path to the Microsoft Office suite.', default=DEFAULT_OFFICE_PATH)
 
 	opts, args = parser.parse_args()
@@ -272,12 +275,14 @@ def setup_office_path(prog, filename, office_path):
 if __name__ == "__main__":
 
 	global exit_on
+	global writes_only
 
 	(opts, args) = options()
 	prog = args[0]
 	exit_on = args[1]
 	filename = args[2]
-
+	writes_only = opts.writes_only
+	
 	logger.info('\n\tLazy Office Analyzer - Analyze documents with WinDbg\n')
 
 	office_invoke = []
