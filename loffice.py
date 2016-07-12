@@ -88,7 +88,7 @@ def cb_regsetvalueexw(event):
 		# TODO: Implement obtaining full registry path from given hkey.
 		#		SHGetRegPath, NtQuerySystemInformation(..., SystemHandleInformation, ...), NtQueryKey(...), etc.
 
-    path = valuename
+		path = valuename
 		logger.info('REGISTRY MODIFICATION\n\tRegistry path: "%s"\n\tData: "%s"\n' % (path, data))
 
 
