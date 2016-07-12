@@ -11,40 +11,52 @@ Requirements:
 Author: @tehsyntx
 """
 
-from winappdbg import Debug, EventHandler
+from winappdbg import win32, Debug, EventHandler
 import sys
 import os
+import optparse
+import logging
+import mimetypes
 
-# Root path to Microsoft Office
-OFFICE_PATH = 'C:\\Program Files\\Microsoft Office\\Office15\\'
+# Setting up logger facilities.
+logging.basicConfig(format='%(levelname)s%(message)s')
+logging.addLevelName( logging.INFO, '')
+logging.addLevelName( logging.DEBUG, '[%s] ' % logging.getLevelName(logging.DEBUG))
+logging.addLevelName( logging.ERROR, '[%s] ' % logging.getLevelName(logging.ERROR))
+logging.addLevelName( logging.WARNING, '[%s] ' % logging.getLevelName(logging.WARNING))
+logger = logging.getLogger()
+
+# Root path to Microsoft Office suite.
+DEFAULT_OFFICE_PATH = os.environ['PROGRAMFILES'] + '\\Microsoft Office\\Office15'
+
 
 def cb_crackurl(event):
-	
 	proc = event.get_process()
 	thread  = event.get_thread()
 
 	lpszUrl = thread.read_stack_dwords(2)[1]
 
-	print 'FOUND URL\n\t%s\n' % proc.peek_string(lpszUrl, fUnicode=True)
+	logger.info('FOUND URL:\n\t%s\n' % proc.peek_string(lpszUrl, fUnicode=True))
 
 	if exit_on == 'url':
-		print 'Exiting on first URL, bye!'
+		logger.info('Exiting on first URL, bye!')
 		sys.exit()
 
-		
 def cb_createfilew(event):
-
 	proc = event.get_process()
 	thread = event.get_thread()
 	
 	lpFileName, dwDesiredAccess = thread.read_stack_dwords(3)[1:]
 
-	if dwDesiredAccess == 0x80000100:
-		print 'OPEN FILE HANDLE\n\t%s\n' % (proc.peek_string(lpFileName, fUnicode=True))
+	access = ''
+	if dwDesiredAccess & 0x80000000: access += 'R'
+	if dwDesiredAccess & 0x40000000: access += 'W'
+	if dwDesiredAccess & 0x20000000: access += 'X'
+	if dwDesiredAccess == 0x10000000:access = 'RWX'
 
+	logger.info('Opened file (access: %s):\n\t%s\n' % (access, proc.peek_string(lpFileName, fUnicode=True)))
 		
 def cb_createprocessw(event):
-
 	proc = event.get_process()
 	thread  = event.get_thread()
 
@@ -52,30 +64,47 @@ def cb_createprocessw(event):
 	application = proc.peek_string(lpApplicationName, fUnicode=True)
 	cmdline = proc.peek_string(lpCommandLine, fUnicode=True)
 
-	print 'CREATE PROCESS\n\tApp: "%s"\n\tCmd-line: "%s"\n' % (application, cmdline)		
+	logger.info('CREATE PROCESS\n\tApp: "%s"\n\tCommand line: "%s"\n' % (application, cmdline))
 	
 	if exit_on == 'url' and 'splwow64' not in application:
-		print 'Process created before URL was found, exiting for safety'
+		logger.info('Process created before URL was found, exiting for safety.')
 		sys.exit()
 		
 	if exit_on == 'proc' and 'splwow64' not in application:
-		print 'Exiting on process creation, bye!'
+		logger.info('Exiting on process creation, bye!')
 		sys.exit()
 
-def cb_stubclient20(event):
-
+def cb_regsetvalueexw(event):
 	proc = event.get_process()
 	thread  = event.get_thread()
 
-	print 'DETECTED WMI QUERY'
+	hkey, lpValueName, _, dwType, lpData, cbData = thread.read_stack_dwords(7)[1:]
+
+	# reg_sz = 1, reg_expand_sz = 2
+	if dwType == 1 or dwType == 2:
+		valuename = proc.peek_string(lpValueName, fUnicode=True)
+		data = proc.peek_string(lpData, fUnicode=True)
+
+		# TODO: Implement obtaining full registry path from given hkey.
+		#		SHGetRegPath, NtQuerySystemInformation(..., SystemHandleInformation, ...), NtQueryKey(...), etc.
+
+		path = valuename
+		logger.info('REGISTRY MODIFICATION\n\tRegistry path: "%s"\n\tData: "%s"\n' % (path, data))
+
+
+def cb_stubclient20(event):
+	proc = event.get_process()
+	thread  = event.get_thread()
+
+	logger.info('DETECTED WMI QUERY')
 
 	strQueryLanguage, strQuery = thread.read_stack_dwords(4)[2:]
 
 	language = proc.peek_string(strQueryLanguage, fUnicode=True)
 	query = proc.peek_string(strQuery, fUnicode=True)
 
-	print '\tLanguage: %s' % language
-	print '\tQuery: %s' % query
+	logger.info('\tLanguage: %s' % language)
+	logger.info('\tQuery: %s' % query)
 
 	if 'win32_product' in query.lower() or 'win32_process' in query.lower():
 
@@ -95,7 +124,7 @@ def cb_stubclient20(event):
 
 		patched_query = proc.peek_string(strQuery, fUnicode=True)
 
-		print '\tPatched with: %s' % patched_query
+		logger.info('\tPatched with: "%s"' % patched_query)
 
 
 class EventHandler(EventHandler):
@@ -105,96 +134,167 @@ class EventHandler(EventHandler):
 		module = event.get_module()
 		pid = event.get_pid()
 
-		if module.match_name("kernel32.dll"):
-			address = module.resolve("CreateProcessW")
-			try:
-				event.debug.break_at(pid, address, cb_createprocessw)
-			except:
-				print '[?] Could not break at CreateProcessW'
+		def setup_breakpoint(modulename, function, callback):
+			if module.match_name(modulename + '.dll'):
+				address = module.resolve(function)
+				try:
+					if address:
+						event.debug.break_at(pid, address, callback)
+					else:
+						logger.warning("Couldn't resolve or address not belong to module: %s!%s" % (modulename, function))
+				except:
+					logger.error('Could not break at: %s!%s.' % (modulename, function))
 
-			address = module.resolve("CreateFileW")
-			try:
-				event.debug.break_at(pid, address, cb_createfilew)
-			except:
-				print '[?] Could not break at CreateFileW'
-			
-		if module.match_name("wininet.dll"):
-			address = module.resolve("InternetCrackUrlW")
-			try:
-				event.debug.break_at(pid, address, cb_crackurl)
-			except:
-				print '[?] Could not break at InternetCrackUrlW'
-
-		if module.match_name("winhttp.dll"):
-			address = module.resolve("WinHttpCrackUrl")
-			try:
-				event.debug.break_at(pid, address, cb_crackurl)
-			except:
-				print '[?] Could not break at WinHttpCrackUrl'
-
-		if module.match_name("ole32.dll"):
-			address = module.resolve("ObjectStublessClient20")
-			try:
-				event.debug.break_at(pid, address, cb_stubclient20)
-			except:
-				print '[?] Could not break at ObjectStublessClient20'
-
+		setup_breakpoint('kernel32', 'CreateProcessW', cb_createprocessw)
+		setup_breakpoint('kernel32', 'CreateFileW', cb_createfilew)
+		setup_breakpoint('wininet', 'InternetCrackUrlW', cb_crackurl)
+		setup_breakpoint('winhttp', 'WinHttpCrackUrl', cb_crackurl)
+		setup_breakpoint('ole32', 'ObjectStublessClient20', cb_stubclient20)
 		
-def usage():
+		# Development in progress...
+		#setup_breakpoint('advapi32', 'RegSetValueExW', cb_regsetvalueexw)
 
-	print ''
-	print 'Lazy Office Analyzer - Analyze documents with WinDbg'
-	print ''
-	print 'loffice.py [type] [exit-on] [filename]'
-	print 'Type:'
-	print '\tword   - Word document'
-	print '\texcel  - Excel spreadsheet'
-	print '\tpower  - Powerpoint document'
-	print '\tscript - VBscript & Javascript'
-	print 'Exit-on:'
-	print '\turl  - After first URL extraction (no remote fetching)'
-	print '\tproc - Before process creation (allow remote fetching)'
-	print '\tnone - Allow uniterupted execution (dangerous)'
+
+	def post_RegCreateKeyExW( self, event, retval ):
+		pass
+
+def options():
+
+	valid_types = ['auto', 'word', 'excel', 'power', 'script']
+	valid_exit_ons = ['url', 'proc', 'none']
+
+	usage = '''
+	%prog [options] <type> <exit-on> <filename>
 	
-	sys.exit()
+Type:
+	auto   - Automatically detect program to launch
+	word   - Word document
+	excel  - Excel spreadsheet
+	power  - Powerpoint document
+	script - VBscript & Javascript
+
+Exit-on:
+	url  - After first URL extraction (no remote fetching)
+	proc - Before process creation (allow remote fetching)
+	none - Allow uniterupted execution (dangerous)
+'''
+	parser = optparse.OptionParser(usage=usage)
+	parser.add_option('-v', '--verbose', dest='verbose', help='Verbose mode.', action='store_true')
+	parser.add_option('-p', '--path', dest='path', help='Path to the Microsoft Office suite.', default=DEFAULT_OFFICE_PATH)
+
+	opts, args = parser.parse_args()
+
+	if len(args) < 3:
+		parser.print_help()
+		sys.exit(0)
+
+	if not os.path.exists(opts.path):
+		logger.error('Specified Office path does not exists: "%s"' % opts.path)
+		sys.exit(1)
+
+	if args[0] not in valid_types:
+		logger.error('Specified <type> is not recognized: "%s".' % args[0])
+		sys.exit(1)
+
+	if args[1] not in valid_exit_ons:
+		logger.error('Specified <exit-on> is not recognized: "%s".' % args[1])
+		sys.exit(1)
+
+	if not os.path.isfile(args[2]):
+		logger.error('Specified file to analyse does not exists: "%s"' % args[2])
+		sys.exit(1)
+
+	if opts.verbose:
+		logger.setLevel(logging.DEBUG)
+	else:
+		logger.setLevel(logging.INFO)
+
+	return (opts, args)
+
+
+def setup_office_path(prog, filename, office_path):
+
+	def detect_ext(exts, type_):
+		for ext in exts:
+			if filename.endswith('.' + ext):
+				return type_
+		return None
+
+	if prog == 'auto':
+
+		# Stage 1: Let the Mime detect file type.
+		guessed = mimetypes.MimeTypes().guess_type(filename)
+		p = None
+
+		if 'msword' in guessed or 'officedocument.wordprocessing' in guessed:
+			p = 'WINWORD'
+		elif 'ms-excel' in guessed or 'officedocument.spreadsheet' in guessed:
+			p = 'EXCEL'
+		elif 'ms-powerpoint' in guessed or 'officedocument.presentation' in guessed:
+			p = 'POWERPNT'
+
+
+		# Stage 2: Detect based on extension
+		if p == None:
+			word = ['doc', 'docx', 'docm', 'dot', 'dotx', 'docb', 'dotm']
+			#word_patterns = ['MSWordDoc', 'Word.Document', 'word/_rels/document', 'word/font']
+			excel = ['xls', 'xlsx', 'xlsm', 'xlt', 'xlm', 'xltx', 'xltm', 'xlsb', 'xla', 'xlw', 'xlam']
+			#excel_patterns = ['xl/_rels/workbook', 'xl/worksheets/', 'Microsoft Excel', 'Excel.Sheet']
+			ppt = ['ppt', 'pptx', 'pptm', 'pot', 'pps', 'potx', 'potm', 'ppam', 'ppsx', 'sldx', 'sldm']
+			#ppt_patterns = ['drs/shapexml.xml', 'Office PowerPoint', 'ppt/slideLayouts', 'ppt/presentation']
+			script = ['js', 'jse', 'vbs', 'vbe', 'vb']
+
+			p = detect_ext(word, 'WINWORD')
+			if not p:
+				p = detect_ext(excel, 'EXCEL')
+				if not p:
+					p = detect_ext(ppt, 'POWERPNT')
+					if not p:
+						p = detect_ext(script, 'system32\\wscript')
+		
+		if p == None:
+			logger.error('Failed to detect file\'s type!')
+			sys.exit(1)
+
+		logger.debug('Auto-detected program to launch: "%s.exe"' % p)
+		return '%s\\%s.exe' % (office_path, p)
 	
+	if prog == 'script':
+		return '%s\\system32\\wscript.exe' % os.environ['WINDIR']
+	elif prog == 'word':
+		return '%s\\WINWORD.EXE' % office_path
+	elif prog == 'excel':
+		return '%s\\EXCEL.EXE' % office_path
+	elif prog == 'power':
+		return '%s\\POWERPNT.EXE' % office_path
+
 if __name__ == "__main__":
 
-	if len(sys.argv) < 4:
-		usage()
-
-	args = []
-
-	if sys.argv[1] == 'script':
-		args.append('%s\\system32\\wscript.exe' % os.environ['WINDIR'])
-	elif sys.argv[1] == 'word':
-		args.append('%s\\WINWORD.EXE' % OFFICE_PATH)
-	elif sys.argv[1] == 'excel':
-		args.append('%s\\EXCEL.EXE' % OFFICE_PATH)
-	elif sys.argv[1] == 'power':
-		args.append('%s\\POWERPNT.EXE' % OFFICE_PATH)
-	else:
-		print 'Unsupported type: %s' % sys.argv[1]
-		sys.exit()
-
-	if not os.path.isfile(args[0]):
-		print 'Host process path could not be found: %s' % args[0]
-		sys.exit()
-		
 	global exit_on
-	if sys.argv[2] == 'url' or sys.argv[2] == 'proc' or sys.argv[2] == 'none':
-		exit_on = sys.argv[2]
-	else:
-		print 'Unsupported exit-on: %s' % sys.argv[2]
-		sys.exit()
+
+	(opts, args) = options()
+	prog = args[0]
+	exit_on = args[1]
+	filename = args[2]
+
+	logger.info('\n\tLazy Office Analyzer - Analyze documents with WinDbg\n')
+
+	office_invoke = []
+	office_invoke.append(setup_office_path(prog, filename, opts.path))
+
+	logger.debug('Using office path:')
+	logger.debug('\t"%s"' % office_invoke[0])
 		
-	args.append(sys.argv[3]) # Document to analyze
+	office_invoke.append(filename) # Document to analyze
+
+	logger.debug('Invocation command:')
+	logger.debug('\t"%s"' % ' '.join(office_invoke))
 
 	with Debug(EventHandler(), bKillOnExit = True) as debug:
-		debug.execv(args)
+		debug.execv(office_invoke)
 		try:
-			print 'Launching...\n'
+			logger.debug('Launching...')
 			debug.loop()
 		except KeyboardInterrupt:
-			print 'Exiting, bye!'
+			logger.info('Exiting, bye!')
 			pass
