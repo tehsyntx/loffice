@@ -11,11 +11,11 @@ Requirements:
 Author: @tehsyntx
 """
 
-from winappdbg import win32, Debug, EventHandler
-import sys
+from winappdbg import Debug, EventHandler
 import os
-import optparse
+import sys
 import logging
+import optparse
 import mimetypes
 
 # Setting up logger facilities.
@@ -27,7 +27,10 @@ logging.addLevelName( logging.WARNING, '[%s] ' % logging.getLevelName(logging.WA
 logger = logging.getLogger()
 
 # Root path to Microsoft Office suite.
-DEFAULT_OFFICE_PATH = os.environ['PROGRAMFILES'] + '\\Microsoft Office\\Office15'
+if os.environ['PROCESSOR_ARCHITECTURE'] == 'x86':
+	DEFAULT_OFFICE_PATH = os.environ['PROGRAMFILES'] + '\\Microsoft Office\\Office14'
+else:
+	DEFAULT_OFFICE_PATH = os.environ['PROGRAMFILES'] + ' (x86)\\Microsoft Office\\Office14'
 
 
 def cb_crackurl(event):
@@ -42,6 +45,7 @@ def cb_crackurl(event):
 		logger.info('Exiting on first URL, bye!')
 		sys.exit()
 
+
 def cb_createfilew(event):
 	proc = event.get_process()
 	thread = event.get_thread()
@@ -51,11 +55,11 @@ def cb_createfilew(event):
 	access = ''
 	if dwDesiredAccess & 0x80000000: access += 'R'
 	if dwDesiredAccess & 0x40000000: access += 'W'
-	if dwDesiredAccess & 0x20000000: access += 'X'
-	if dwDesiredAccess == 0x10000000:access = 'RWX'
 
-	logger.info('Opened file (access: %s):\n\t%s\n' % (access, proc.peek_string(lpFileName, fUnicode=True)))
-		
+	if access is not '':
+		logger.info('Opened file (access: %s):\n\t%s\n' % (access, proc.peek_string(lpFileName, fUnicode=True)))
+
+
 def cb_createprocessw(event):
 	proc = event.get_process()
 	thread  = event.get_thread()
@@ -73,6 +77,7 @@ def cb_createprocessw(event):
 	if exit_on == 'proc' and 'splwow64' not in application:
 		logger.info('Exiting on process creation, bye!')
 		sys.exit()
+
 
 def cb_regsetvalueexw(event):
 	proc = event.get_process()
@@ -151,12 +156,6 @@ class EventHandler(EventHandler):
 		setup_breakpoint('winhttp', 'WinHttpCrackUrl', cb_crackurl)
 		setup_breakpoint('ole32', 'ObjectStublessClient20', cb_stubclient20)
 		
-		# Development in progress...
-		#setup_breakpoint('advapi32', 'RegSetValueExW', cb_regsetvalueexw)
-
-
-	def post_RegCreateKeyExW( self, event, retval ):
-		pass
 
 def options():
 
@@ -236,6 +235,7 @@ def setup_office_path(prog, filename, office_path):
 
 		# Stage 2: Detect based on extension
 		if p == None:
+			logger.debug('Could not detect type via mimetype')
 			word = ['doc', 'docx', 'docm', 'dot', 'dotx', 'docb', 'dotm']
 			#word_patterns = ['MSWordDoc', 'Word.Document', 'word/_rels/document', 'word/font']
 			excel = ['xls', 'xlsx', 'xlsm', 'xlt', 'xlm', 'xltx', 'xltm', 'xlsb', 'xla', 'xlw', 'xlam']
@@ -259,7 +259,7 @@ def setup_office_path(prog, filename, office_path):
 		logger.debug('Auto-detected program to launch: "%s.exe"' % p)
 		return '%s\\%s.exe' % (office_path, p)
 	
-	if prog == 'script':
+	elif prog == 'script':
 		return '%s\\system32\\wscript.exe' % os.environ['WINDIR']
 	elif prog == 'word':
 		return '%s\\WINWORD.EXE' % office_path
@@ -267,6 +267,7 @@ def setup_office_path(prog, filename, office_path):
 		return '%s\\EXCEL.EXE' % office_path
 	elif prog == 'power':
 		return '%s\\POWERPNT.EXE' % office_path
+
 
 if __name__ == "__main__":
 
