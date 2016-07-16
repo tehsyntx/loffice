@@ -59,7 +59,7 @@ def cb_createfilew(event):
 	filename = proc.peek_string(lpFileName, fUnicode=True)
 
 	if access is not '' and (writes_only and 'W' in access) and '\\\\' not in filename[:2]: # Exclude PIPE and WMIDataDevice
-		logger.info('Opened file (access: %s):\n\t%s\n' % (access, filename))
+		logger.info('Opened file handle (access: %s):\n\t%s\n' % (access, filename))
 
 
 def cb_createprocessw(event):
@@ -79,24 +79,6 @@ def cb_createprocessw(event):
 	if exit_on == 'proc' and 'splwow64' not in application:
 		logger.info('Exiting on process creation, bye!')
 		sys.exit()
-
-
-def cb_regsetvalueexw(event):
-	proc = event.get_process()
-	thread  = event.get_thread()
-
-	hkey, lpValueName, _, dwType, lpData, cbData = thread.read_stack_dwords(7)[1:]
-
-	# reg_sz = 1, reg_expand_sz = 2
-	if dwType == 1 or dwType == 2:
-		valuename = proc.peek_string(lpValueName, fUnicode=True)
-		data = proc.peek_string(lpData, fUnicode=True)
-
-		# TODO: Implement obtaining full registry path from given hkey.
-		#		SHGetRegPath, NtQuerySystemInformation(..., SystemHandleInformation, ...), NtQueryKey(...), etc.
-
-		path = valuename
-		logger.info('REGISTRY MODIFICATION\n\tRegistry path: "%s"\n\tData: "%s"\n' % (path, data))
 
 
 def cb_stubclient20(event):
@@ -134,6 +116,23 @@ def cb_stubclient20(event):
 		logger.info('\tPatched with: "%s"' % patched_query)
 
 
+def cb_stubclient24(event):
+
+	proc = event.get_process()
+	thread  = event.get_thread()
+	
+	sObject, cObject = thread.read_stack_dwords(4)[2:]
+
+	object = proc.peek_string(sObject, fUnicode=True)
+	method = proc.peek_string(cObject, fUnicode=True)
+
+	if object.lower() == 'win32_process' and method.lower() == 'create':
+		logger.info('Process creation via WMI detected')
+		if exit_on == 'url' or exit_on == 'proc':
+			logger.info('Exiting for safety')
+			sys.exit(0)
+			
+
 class EventHandler(EventHandler):
 
 	def load_dll(self, event):
@@ -157,6 +156,7 @@ class EventHandler(EventHandler):
 		setup_breakpoint('wininet', 'InternetCrackUrlW', cb_crackurl)
 		setup_breakpoint('winhttp', 'WinHttpCrackUrl', cb_crackurl)
 		setup_breakpoint('ole32', 'ObjectStublessClient20', cb_stubclient20)
+		setup_breakpoint('ole32', 'ObjectStublessClient24', cb_stubclient24)
 		
 
 def options():
