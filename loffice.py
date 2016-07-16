@@ -58,9 +58,11 @@ def cb_createfilew(event):
 
 	filename = proc.peek_string(lpFileName, fUnicode=True)
 
-	if access is not '' and (writes_only and 'W' in access) and '\\\\' not in filename[:2]: # Exclude PIPE and WMIDataDevice
-		logger.info('Opened file handle (access: %s):\n\t%s\n' % (access, filename))
-
+	if access is not '' and '\\\\' not in filename[:2]: # Exclude PIPE and WMIDataDevice
+		if writes_only and 'W' in access:
+			logger.info('Opened file handle (access: %s):\n\t%s\n' % (access, filename))
+		elif not writes_only:
+			logger.info('Opened file handle (access: %s):\n\t%s\n' % (access, filename))
 
 def cb_createprocessw(event):
 	proc = event.get_process()
