@@ -4,8 +4,8 @@
 Loffice - Lazy Office Analyzer
 
 Requirements:
-- Microsoft Office (32-bit)
-- WinDbg (x86) - https://msdn.microsoft.com/en-us/windows/hardware/hh852365
+- Microsoft Office
+- WinDbg - https://msdn.microsoft.com/en-us/windows/hardware/hh852365
 - WinAppDbg - http://winappdbg.sourceforge.net/
 
 Author: @tehsyntx
@@ -27,18 +27,19 @@ logging.addLevelName( logging.WARNING, '[%s] ' % logging.getLevelName(logging.WA
 logger = logging.getLogger()
 
 # Root path to Microsoft Office suite.
-if os.environ['PROCESSOR_ARCHITECTURE'] == 'x86':
-	DEFAULT_OFFICE_PATH = os.environ['PROGRAMFILES'] + '\\Microsoft Office\\Office14'
-else:
-	DEFAULT_OFFICE_PATH = os.environ['PROGRAMFILES'] + ' (x86)\\Microsoft Office\\Office14'
+DEFAULT_OFFICE_PATH = os.environ['PROGRAMFILES'] + '\\Microsoft Office\\Office16'
 
 
 def cb_crackurl(event):
 	proc = event.get_process()
 	thread  = event.get_thread()
 
-	lpszUrl = thread.read_stack_dwords(2)[1]
-
+	if proc.get_bits() == 32:
+		lpszUrl = thread.read_stack_dwords(2)[1]
+	else:
+		context = thread.get_context()
+		lpszUrl = context['Rcx']
+		
 	logger.info('FOUND URL:\n\t%s\n' % proc.peek_string(lpszUrl, fUnicode=True))
 
 	if exit_on == 'url':
@@ -50,7 +51,12 @@ def cb_createfilew(event):
 	proc = event.get_process()
 	thread = event.get_thread()
 	
-	lpFileName, dwDesiredAccess = thread.read_stack_dwords(3)[1:]
+	if proc.get_bits() == 32:
+		lpFileName, dwDesiredAccess = thread.read_stack_dwords(3)[1:]
+	else:
+		context = thread.get_context()
+		lpFileName = context['Rcx']
+		dwDesiredAccess = context['Rdx']
 
 	access = ''
 	if dwDesiredAccess & 0x80000000: access += 'R'
@@ -64,11 +70,18 @@ def cb_createfilew(event):
 		elif not writes_only:
 			logger.info('Opened file handle (access: %s):\n\t%s\n' % (access, filename))
 
+
 def cb_createprocessw(event):
 	proc = event.get_process()
 	thread  = event.get_thread()
 
-	lpApplicationName, lpCommandLine = thread.read_stack_dwords(3)[1:]
+	if proc.get_bits() == 32:
+		lpApplicationName, lpCommandLine = thread.read_stack_dwords(3)[1:]
+	else:
+		context = thread.get_context()
+		lpApplicationName = context['Rcx']
+		lpCommandLine = context['Rdx']
+
 	application = proc.peek_string(lpApplicationName, fUnicode=True)
 	cmdline = proc.peek_string(lpCommandLine, fUnicode=True)
 
@@ -89,13 +102,18 @@ def cb_stubclient20(event):
 
 	logger.info('DETECTED WMI QUERY')
 
-	strQueryLanguage, strQuery = thread.read_stack_dwords(4)[2:]
-
+	if proc.get_bits() == 32:
+		strQueryLanguage, strQuery = thread.read_stack_dwords(4)[2:]
+	else:
+		context = thread.get_context()
+		strQueryLanguage = context['Rdx']
+		strQuery = context['R8']
+		
 	language = proc.peek_string(strQueryLanguage, fUnicode=True)
 	query = proc.peek_string(strQuery, fUnicode=True)
 
 	logger.info('\tLanguage: %s' % language)
-	logger.info('\tQuery: %s' % query)
+	logger.info('\tQuery: %s\n' % query)
 
 	if 'win32_product' in query.lower() or 'win32_process' in query.lower():
 
@@ -115,7 +133,7 @@ def cb_stubclient20(event):
 
 		patched_query = proc.peek_string(strQuery, fUnicode=True)
 
-		logger.info('\tPatched with: "%s"' % patched_query)
+		logger.info('\tPatched with: "%s"\n' % patched_query)
 
 
 def cb_stubclient24(event):
@@ -123,8 +141,13 @@ def cb_stubclient24(event):
 	proc = event.get_process()
 	thread  = event.get_thread()
 	
-	sObject, cObject = thread.read_stack_dwords(4)[2:]
-
+	if proc.get_bits() == 32:
+		sObject, cObject = thread.read_stack_dwords(4)[2:]
+	else:
+		context = thread.get_context()
+		sObject = context['Rdx']
+		cObject = context['R8']
+		
 	object = proc.peek_string(sObject, fUnicode=True)
 	method = proc.peek_string(cObject, fUnicode=True)
 
