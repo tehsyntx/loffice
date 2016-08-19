@@ -71,7 +71,7 @@ def cb_createfilew(event):
 			logger.info('Opened file handle (access: %s):\n\t%s\n' % (access, filename))
 
 
-def cb_createprocessw(event):
+def cb_createprocess(event):
 	proc = event.get_process()
 	thread  = event.get_thread()
 
@@ -176,7 +176,7 @@ class EventHandler(EventHandler):
 				except:
 					logger.error('Could not break at: %s!%s.' % (modulename, function))
 
-		setup_breakpoint('kernel32', 'CreateProcessW', cb_createprocessw)
+		setup_breakpoint('kernel32', 'CreateProcessInternalW', cb_createprocess)
 		setup_breakpoint('kernel32', 'CreateFileW', cb_createfilew)
 		setup_breakpoint('wininet', 'InternetCrackUrlW', cb_crackurl)
 		setup_breakpoint('winhttp', 'WinHttpCrackUrl', cb_crackurl)
