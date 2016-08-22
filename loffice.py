@@ -4,18 +4,18 @@
 Loffice - Lazy Office Analyzer
 
 Requirements:
-- Microsoft Office (32-bit)
-- WinDbg (x86) - https://msdn.microsoft.com/en-us/windows/hardware/hh852365
+- Microsoft Office
+- WinDbg - https://msdn.microsoft.com/en-us/windows/hardware/hh852365
 - WinAppDbg - http://winappdbg.sourceforge.net/
 
 Author: @tehsyntx
 """
 
-from winappdbg import win32, Debug, EventHandler
-import sys
+from winappdbg import Debug, EventHandler
 import os
-import optparse
+import sys
 import logging
+import optparse
 import mimetypes
 
 # Setting up logger facilities.
@@ -27,15 +27,19 @@ logging.addLevelName( logging.WARNING, '[%s] ' % logging.getLevelName(logging.WA
 logger = logging.getLogger()
 
 # Root path to Microsoft Office suite.
-DEFAULT_OFFICE_PATH = os.environ['PROGRAMFILES'] + '\\Microsoft Office\\Office15'
+DEFAULT_OFFICE_PATH = os.environ['PROGRAMFILES'] + '\\Microsoft Office\\Office16'
 
 
 def cb_crackurl(event):
 	proc = event.get_process()
 	thread  = event.get_thread()
 
-	lpszUrl = thread.read_stack_dwords(2)[1]
-
+	if proc.get_bits() == 32:
+		lpszUrl = thread.read_stack_dwords(2)[1]
+	else:
+		context = thread.get_context()
+		lpszUrl = context['Rcx']
+		
 	logger.info('FOUND URL:\n\t%s\n' % proc.peek_string(lpszUrl, fUnicode=True))
 
 	if exit_on == 'url':
@@ -46,21 +50,37 @@ def cb_createfilew(event):
 	proc = event.get_process()
 	thread = event.get_thread()
 	
-	lpFileName, dwDesiredAccess = thread.read_stack_dwords(3)[1:]
+	if proc.get_bits() == 32:
+		lpFileName, dwDesiredAccess = thread.read_stack_dwords(3)[1:]
+	else:
+		context = thread.get_context()
+		lpFileName = context['Rcx']
+		dwDesiredAccess = context['Rdx']
 
 	access = ''
 	if dwDesiredAccess & 0x80000000: access += 'R'
 	if dwDesiredAccess & 0x40000000: access += 'W'
-	if dwDesiredAccess & 0x20000000: access += 'X'
-	if dwDesiredAccess == 0x10000000:access = 'RWX'
 
-	logger.info('Opened file (access: %s):\n\t%s\n' % (access, proc.peek_string(lpFileName, fUnicode=True)))
-		
-def cb_createprocessw(event):
+	filename = proc.peek_string(lpFileName, fUnicode=True)
+
+	if access is not '' and '\\\\' not in filename[:2]: # Exclude PIPE and WMIDataDevice
+		if writes_only and 'W' in access:
+			logger.info('Opened file handle (access: %s):\n\t%s\n' % (access, filename))
+		elif not writes_only:
+			logger.info('Opened file handle (access: %s):\n\t%s\n' % (access, filename))
+
+
+def cb_createprocess(event):
 	proc = event.get_process()
 	thread  = event.get_thread()
 
-	lpApplicationName, lpCommandLine = thread.read_stack_dwords(3)[1:]
+	if proc.get_bits() == 32:
+		lpApplicationName, lpCommandLine = thread.read_stack_dwords(3)[1:]
+	else:
+		context = thread.get_context()
+		lpApplicationName = context['Rcx']
+		lpCommandLine = context['Rdx']
+
 	application = proc.peek_string(lpApplicationName, fUnicode=True)
 	cmdline = proc.peek_string(lpCommandLine, fUnicode=True)
 
@@ -74,37 +94,24 @@ def cb_createprocessw(event):
 		logger.info('Exiting on process creation, bye!')
 		sys.exit()
 
-def cb_regsetvalueexw(event):
-	proc = event.get_process()
-	thread  = event.get_thread()
-
-	hkey, lpValueName, _, dwType, lpData, cbData = thread.read_stack_dwords(7)[1:]
-
-	# reg_sz = 1, reg_expand_sz = 2
-	if dwType == 1 or dwType == 2:
-		valuename = proc.peek_string(lpValueName, fUnicode=True)
-		data = proc.peek_string(lpData, fUnicode=True)
-
-		# TODO: Implement obtaining full registry path from given hkey.
-		#		SHGetRegPath, NtQuerySystemInformation(..., SystemHandleInformation, ...), NtQueryKey(...), etc.
-
-		path = valuename
-		logger.info('REGISTRY MODIFICATION\n\tRegistry path: "%s"\n\tData: "%s"\n' % (path, data))
-
-
 def cb_stubclient20(event):
 	proc = event.get_process()
 	thread  = event.get_thread()
 
 	logger.info('DETECTED WMI QUERY')
 
-	strQueryLanguage, strQuery = thread.read_stack_dwords(4)[2:]
-
+	if proc.get_bits() == 32:
+		strQueryLanguage, strQuery = thread.read_stack_dwords(4)[2:]
+	else:
+		context = thread.get_context()
+		strQueryLanguage = context['Rdx']
+		strQuery = context['R8']
+		
 	language = proc.peek_string(strQueryLanguage, fUnicode=True)
 	query = proc.peek_string(strQuery, fUnicode=True)
 
 	logger.info('\tLanguage: %s' % language)
-	logger.info('\tQuery: %s' % query)
+	logger.info('\tQuery: %s\n' % query)
 
 	if 'win32_product' in query.lower() or 'win32_process' in query.lower():
 
@@ -124,8 +131,30 @@ def cb_stubclient20(event):
 
 		patched_query = proc.peek_string(strQuery, fUnicode=True)
 
-		logger.info('\tPatched with: "%s"' % patched_query)
+		logger.info('\tPatched with: "%s"\n' % patched_query)
 
+
+def cb_stubclient24(event):
+
+	proc = event.get_process()
+	thread  = event.get_thread()
+	
+	if proc.get_bits() == 32:
+		sObject, cObject = thread.read_stack_dwords(4)[2:]
+	else:
+		context = thread.get_context()
+		sObject = context['Rdx']
+		cObject = context['R8']
+		
+	object = proc.peek_string(sObject, fUnicode=True)
+	method = proc.peek_string(cObject, fUnicode=True)
+
+	if object.lower() == 'win32_process' and method.lower() == 'create':
+		logger.info('Process creation via WMI detected')
+		if exit_on == 'url' or exit_on == 'proc':
+			logger.info('Exiting for safety')
+			sys.exit(0)
+			
 
 class EventHandler(EventHandler):
 
@@ -145,19 +174,13 @@ class EventHandler(EventHandler):
 				except:
 					logger.error('Could not break at: %s!%s.' % (modulename, function))
 
-		setup_breakpoint('kernel32', 'CreateProcessW', cb_createprocessw)
+		setup_breakpoint('kernel32', 'CreateProcessInternalW', cb_createprocess)
 		setup_breakpoint('kernel32', 'CreateFileW', cb_createfilew)
 		setup_breakpoint('wininet', 'InternetCrackUrlW', cb_crackurl)
 		setup_breakpoint('winhttp', 'WinHttpCrackUrl', cb_crackurl)
 		setup_breakpoint('ole32', 'ObjectStublessClient20', cb_stubclient20)
+		setup_breakpoint('ole32', 'ObjectStublessClient24', cb_stubclient24)
 		
-		# Development in progress...
-		#setup_breakpoint('advapi32', 'RegSetValueExW', cb_regsetvalueexw)
-
-
-	def post_RegCreateKeyExW( self, event, retval ):
-		pass
-
 def options():
 
 	valid_types = ['auto', 'word', 'excel', 'power', 'script']
@@ -180,6 +203,7 @@ Exit-on:
 '''
 	parser = optparse.OptionParser(usage=usage)
 	parser.add_option('-v', '--verbose', dest='verbose', help='Verbose mode.', action='store_true')
+	parser.add_option('-w', '--writes-only', dest='writes_only', help='Log file writes only (exclude reads)', action='store_true')
 	parser.add_option('-p', '--path', dest='path', help='Path to the Microsoft Office suite.', default=DEFAULT_OFFICE_PATH)
 
 	opts, args = parser.parse_args()
@@ -236,6 +260,7 @@ def setup_office_path(prog, filename, office_path):
 
 		# Stage 2: Detect based on extension
 		if p == None:
+			logger.debug('Could not detect type via mimetype')
 			word = ['doc', 'docx', 'docm', 'dot', 'dotx', 'docb', 'dotm']
 			#word_patterns = ['MSWordDoc', 'Word.Document', 'word/_rels/document', 'word/font']
 			excel = ['xls', 'xlsx', 'xlsm', 'xlt', 'xlm', 'xltx', 'xltm', 'xlsb', 'xla', 'xlw', 'xlam']
@@ -259,7 +284,7 @@ def setup_office_path(prog, filename, office_path):
 		logger.debug('Auto-detected program to launch: "%s.exe"' % p)
 		return '%s\\%s.exe' % (office_path, p)
 	
-	if prog == 'script':
+	elif prog == 'script':
 		return '%s\\system32\\wscript.exe' % os.environ['WINDIR']
 	elif prog == 'word':
 		return '%s\\WINWORD.EXE' % office_path
@@ -271,12 +296,14 @@ def setup_office_path(prog, filename, office_path):
 if __name__ == "__main__":
 
 	global exit_on
+	global writes_only
 
 	(opts, args) = options()
 	prog = args[0]
 	exit_on = args[1]
 	filename = args[2]
-
+	writes_only = opts.writes_only
+	
 	logger.info('\n\tLazy Office Analyzer - Analyze documents with WinDbg\n')
 
 	office_invoke = []

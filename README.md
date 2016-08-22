@@ -1,8 +1,8 @@
 # loffice - Lazy Office Analyzer
 
 Requirements:
-- Microsoft Office (32-bit)
-- WinDbg (x86) - https://msdn.microsoft.com/en-us/windows/hardware/hh852365
+- Microsoft Office
+- WinDbg - https://msdn.microsoft.com/en-us/windows/hardware/hh852365
 - WinAppDbg - http://winappdbg.sourceforge.net/
 - Python 2.7 
 
