@@ -17,6 +17,9 @@ import sys
 import logging
 import optparse
 import mimetypes
+import _winreg
+from ctypes import create_unicode_buffer, windll
+
 
 # Setting up logger facilities.
 logging.basicConfig(format='%(levelname)s%(message)s')
@@ -27,7 +30,7 @@ logging.addLevelName( logging.WARNING, '[%s] ' % logging.getLevelName(logging.WA
 logger = logging.getLogger()
 
 # Root path to Microsoft Office suite.
-DEFAULT_OFFICE_PATH = os.environ['PROGRAMFILES'] + '\\Microsoft Office\\Office16'
+DEFAULT_OFFICE_PATH = ''
 
 
 def cb_crackurl(event):
@@ -181,10 +184,27 @@ class EventHandler(EventHandler):
 		setup_breakpoint('ole32', 'ObjectStublessClient20', cb_stubclient20)
 		setup_breakpoint('ole32', 'ObjectStublessClient24', cb_stubclient24)
 		
+def establish_office_default_path():
+    global DEFAULT_OFFICE_PATH
+
+    # Step #1: Get default Word document association
+    reg = _winreg.ConnectRegistry(None, _winreg.HKEY_LOCAL_MACHINE)
+    key = _winreg.OpenKey(reg, r"SOFTWARE\Classes\Word\shell\open\command")
+    _, value, _ = _winreg.EnumValue(key, 0)
+    value = value[:value.rfind('\\')]
+
+    # Step #2: Unwind Windows DOS short path into long one
+    buf = create_unicode_buffer(500)
+    get_long_path_name = windll.kernel32.GetLongPathNameW
+    get_long_path_name(unicode(value), buf, 500)
+    DEFAULT_OFFICE_PATH = buf.value
+
 def options():
 
 	valid_types = ['auto', 'word', 'excel', 'power', 'script']
 	valid_exit_ons = ['url', 'proc', 'none']
+
+        establish_office_default_path()
 
 	usage = '''
 	%prog [options] <type> <exit-on> <filename>
@@ -325,3 +345,4 @@ if __name__ == "__main__":
 		except KeyboardInterrupt:
 			logger.info('Exiting, bye!')
 			pass
+
