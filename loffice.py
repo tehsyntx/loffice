@@ -76,11 +76,11 @@ def cb_createprocess(event):
 	thread  = event.get_thread()
 
 	if proc.get_bits() == 32:
-		lpApplicationName, lpCommandLine = thread.read_stack_dwords(3)[1:]
+		lpApplicationName, lpCommandLine = thread.read_stack_dwords(4)[2:]
 	else:
 		context = thread.get_context()
-		lpApplicationName = context['Rcx']
-		lpCommandLine = context['Rdx']
+		lpApplicationName = context['Rdx']
+		lpCommandLine = context['R8']
 
 	application = proc.peek_string(lpApplicationName, fUnicode=True)
 	cmdline = proc.peek_string(lpCommandLine, fUnicode=True)
