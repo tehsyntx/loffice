@@ -156,18 +156,43 @@ def cb_stubclient24(event):
 		if exit_on == 'url' or exit_on == 'proc':
 			logger.info('Exiting for safety')
 			sys.exit(0)
+
 			
+def cb_vbastrcmp(event):
+
+	# str1: search for string
+	# str2: string to search in
+
+	thread = event.get_thread()
+	proc = event.get_process()
+
+	if proc.get_bits() == 32:
+		str1, str2 = thread.read_stack_dwords(3)[1:]
+	else:
+		context = thread.get_context()
+		str1 = context['Rdx']
+		str2 = context['R8']
+
+	s1 = proc.peek_string(str1, fUnicode=True)
+	s2 = proc.peek_string(str2, fUnicode=True)
+
+	logger.info('COMPARE:\n\tstr1: %s\n\tstr2: %s\n' % (s1, s2))
+
 
 class EventHandler(EventHandler):
 
 	def load_dll(self, event):
 
 		module = event.get_module()
+		proc = event.get_process()
 		pid = event.get_pid()
 
 		def setup_breakpoint(modulename, function, callback):
 			if module.match_name(modulename + '.dll'):
-				address = module.resolve(function)
+				if function[:2] == '0x':
+					address = module.lpBaseOfDll + int(function[2:], 16)
+				else:
+					address = module.resolve(function)
 				try:
 					if address:
 						event.debug.break_at(pid, address, callback)
@@ -175,6 +200,12 @@ class EventHandler(EventHandler):
 						logger.warning("Couldn't resolve or address not belong to module: %s!%s" % (modulename, function))
 				except:
 					logger.error('Could not break at: %s!%s.' % (modulename, function))
+					while True:
+						choice = raw_input('Continue anyway? (y/n): ')
+						if choice == 'y':
+							break
+						elif choice == 'n':
+							sys.exit()
 
 		setup_breakpoint('kernel32', 'CreateProcessInternalW', cb_createprocess)
 		setup_breakpoint('kernel32', 'CreateFileW', cb_createfilew)
@@ -182,7 +213,27 @@ class EventHandler(EventHandler):
 		setup_breakpoint('winhttp', 'WinHttpCrackUrl', cb_crackurl)
 		setup_breakpoint('ole32', 'ObjectStublessClient20', cb_stubclient20)
 		setup_breakpoint('ole32', 'ObjectStublessClient24', cb_stubclient24)
-		
+
+		version = DEFAULT_OFFICE_PATH.split('\\')[-1]
+
+		if version == 'Office14': # Office 2010
+			if proc.get_bits() == 32:
+				setup_breakpoint('vbe7', '0x2242E3', cb_vbastrcmp)
+			else:
+				# offset needed
+
+		elif version == 'Office15': # Office 2013
+			if proc.get_bits() == 32:
+				setup_breakpoint('vbe7', '0x1FA521', cb_vbastrcmp)
+			#else:
+				# offset needed...
+
+		elif version == 'Office16':
+			if proc.get_bits() == 32:
+				i=1# offset needed
+			else:
+				setup_breakpoint('vbe7', '0x35A909', cb_vbastrcmp)
+
 
 def options():
 
