@@ -11,15 +11,22 @@ Requirements:
 Author: @tehsyntx
 """
 
+from __future__ import print_function
 from winappdbg import Debug, EventHandler
+from time import strftime, gmtime
 import os
 import sys
 import logging
+import warnings
 import optparse
 import mimetypes
 
 # Setting up logger facilities.
-logging.basicConfig(format='%(levelname)s%(message)s')
+if not os.path.exists('%s\\logs' % os.getcwd()):
+	os.mkdir('%s\\logs' % os.getcwd())
+
+logfile = '%s\\logs\\%s_%s.log' % (os.getcwd(), sys.argv[-1].split('\\')[-1], strftime('%Y%d%m%H%M%S', gmtime()))
+logging.basicConfig(filename=logfile, format='%(asctime)s - %(levelname)s %(message)s')
 logging.addLevelName( logging.INFO, '')
 logging.addLevelName( logging.DEBUG, '[%s] ' % logging.getLevelName(logging.DEBUG))
 logging.addLevelName( logging.ERROR, '[%s] ' % logging.getLevelName(logging.ERROR))
@@ -27,10 +34,16 @@ logging.addLevelName( logging.WARNING, '[%s] ' % logging.getLevelName(logging.WA
 logger = logging.getLogger()
 
 # Root path to Microsoft Office suite.
-DEFAULT_OFFICE_PATH = os.environ['PROGRAMFILES'] + '\\Microsoft Office\\Office16'
+DEFAULT_OFFICE_PATH = os.environ['PROGRAMFILES'] + '\\Microsoft Office\\Office14'
+
+results = {'instr' : {}, 'filehandle' : {}, 'urls' : [], 'procs' : [], 'wmi' : []}
+stats = { 'str' : 0, 'url' : 0, 'filew' : 0, 'filer' : 0, 'wmi' : 0, 'proc' : 0 }
 
 
 def cb_crackurl(event):
+
+	stats['url'] += 1
+
 	proc = event.get_process()
 	thread  = event.get_thread()
 
@@ -39,18 +52,24 @@ def cb_crackurl(event):
 	else:
 		context = thread.get_context()
 		lpszUrl = context['Rcx']
-		
-	logger.info('FOUND URL:\n\t%s\n' % proc.peek_string(lpszUrl, fUnicode=True))
+
+	url = proc.peek_string(lpszUrl, fUnicode=True)
+
+	logger.info('FOUND URL: %s' % url)
+	results['urls'].append(url)
 
 	if exit_on == 'url':
 		logger.info('Exiting on first URL, bye!')
-		sys.exit()
+		safe_exit()
+
+	print_stats()
 
 
 def cb_createfilew(event):
+
 	proc = event.get_process()
 	thread = event.get_thread()
-	
+
 	if proc.get_bits() == 32:
 		lpFileName, dwDesiredAccess = thread.read_stack_dwords(3)[1:]
 	else:
@@ -66,12 +85,28 @@ def cb_createfilew(event):
 
 	if access is not '' and '\\\\' not in filename[:2]: # Exclude PIPE and WMIDataDevice
 		if writes_only and 'W' in access:
-			logger.info('Opened file handle (access: %s):\n\t%s\n' % (access, filename))
+			logger.info('Opened file handle (access: %s):%s' % (access, filename))
 		elif not writes_only:
-			logger.info('Opened file handle (access: %s):\n\t%s\n' % (access, filename))
+			logger.info('Opened file handle (access: %s):%s' % (access, filename))
+
+		if results['filehandle'].has_key(filename):
+			results['filehandle'][filename].append(access)
+		else:
+			results['filehandle'][filename] = []
+			results['filehandle'][filename].append(access)
+
+		if 'W' in access:
+			stats['filew'] += 1
+		else:
+			stats['filer'] += 1
+
+	print_stats()
 
 
 def cb_createprocess(event):
+
+	stats['proc'] += 1
+
 	proc = event.get_process()
 	thread  = event.get_thread()
 
@@ -85,18 +120,26 @@ def cb_createprocess(event):
 	application = proc.peek_string(lpApplicationName, fUnicode=True)
 	cmdline = proc.peek_string(lpCommandLine, fUnicode=True)
 
-	logger.info('CREATE PROCESS\n\tApp: "%s"\n\tCommand line: "%s"\n' % (application, cmdline))
-	
+	logger.info('CREATE PROCESS')
+	logger.info('App: "%s" Command line: "%s"' % (application, cmdline))
+
+	results['procs'].append({'cmd' : cmdline, 'app' : application})
+
+	print_stats()
+
 	if exit_on == 'url' and 'splwow64' not in application:
 		logger.info('Process created before URL was found, exiting for safety.')
 		sys.exit()
-		
+
 	if exit_on == 'proc' and 'splwow64' not in application:
 		logger.info('Exiting on process creation, bye!')
-		sys.exit()
+		safe_exit()
 
 
 def cb_stubclient20(event):
+
+	stats['wmi'] += 1
+
 	proc = event.get_process()
 	thread  = event.get_thread()
 
@@ -108,12 +151,14 @@ def cb_stubclient20(event):
 		context = thread.get_context()
 		strQueryLanguage = context['Rdx']
 		strQuery = context['R8']
-		
+
 	language = proc.peek_string(strQueryLanguage, fUnicode=True)
 	query = proc.peek_string(strQuery, fUnicode=True)
 
-	logger.info('\tLanguage: %s' % language)
-	logger.info('\tQuery: %s\n' % query)
+	logger.info('Language: %s' % language)
+	logger.info('Query: %s' % query)
+
+	r_query = {'query' : query, 'patched' : ''}
 
 	if 'win32_product' in query.lower() or 'win32_process' in query.lower():
 
@@ -132,22 +177,29 @@ def cb_stubclient20(event):
 		proc.write_char(strQuery + (len(decoy) * 2) + 1, 0x00) # Ensure UNICODE string termination
 
 		patched_query = proc.peek_string(strQuery, fUnicode=True)
+		r_query['patched'] = patched_query
 
-		logger.info('\tPatched with: "%s"\n' % patched_query)
+		logger.info('Patched with: "%s"' % patched_query)
+
+	results['wmi'].append(r_query)
+
+	print_stats()
 
 
 def cb_stubclient24(event):
 
+	stats['wmi'] += 1
+
 	proc = event.get_process()
 	thread  = event.get_thread()
-	
+
 	if proc.get_bits() == 32:
 		sObject, cObject = thread.read_stack_dwords(4)[2:]
 	else:
 		context = thread.get_context()
 		sObject = context['Rdx']
 		cObject = context['R8']
-		
+
 	object = proc.peek_string(sObject, fUnicode=True)
 	method = proc.peek_string(cObject, fUnicode=True)
 
@@ -155,13 +207,17 @@ def cb_stubclient24(event):
 		logger.info('Process creation via WMI detected')
 		if exit_on == 'url' or exit_on == 'proc':
 			logger.info('Exiting for safety')
-			sys.exit(0)
+			safe_exit()
 
-			
+	print_stats()
+
+
 def cb_vbastrcmp(event):
 
 	# str1: search for string
 	# str2: string to search in
+
+	stats['str'] += 1
 
 	thread = event.get_thread()
 	proc = event.get_process()
@@ -176,7 +232,57 @@ def cb_vbastrcmp(event):
 	s1 = proc.peek_string(str1, fUnicode=True)
 	s2 = proc.peek_string(str2, fUnicode=True)
 
-	logger.info('COMPARE:\n\tstr1: %s\n\tstr2: %s\n' % (s1, s2))
+	logger.info('COMPARE:\n\tstr1: "%s"\n\tstr2: "%s"\n' % (s1, s2))
+
+	if results['instr'].has_key(s2) and s1 not in results['instr'][s2]:
+		results['instr'][s2].append(s1)
+	else:
+		results['instr'][s2] = []
+		results['instr'][s2].append(s1)
+
+	print_stats()
+
+
+def safe_exit():
+	save_and_display_results()
+	print('Exiting for safety...')
+	logger.info('Exiting for safety...')
+	sys.exit()
+
+
+def print_stats():
+	if logger.getEffectiveLevel() == 10:
+		return
+	else:
+		msg = 'URL: %d  |  File(W): %d  |  File(R): %d  | Proc: %d  |  WMI: %d  |  StrCmp: %d\r' % (stats['url'], stats['filew'], stats['filer'], stats['proc'], stats['wmi'], stats['str'])
+		print(msg, end='')
+
+
+def save_and_display_results():
+
+	print('\n\n\t==== FILE HANDLES OPENED ====\n')
+	for fname in results['filehandle'].keys():
+		print('%s \t %s' % (','.join(list(set(results['filehandle'][fname]))), fname))
+
+	print('\n\n\t==== STRING COMPARISONS ====\n')
+	for sc in results['instr'].keys():
+		print('\nSubject: %s' % sc.encode('ascii', errors='replace'))
+		print('Search for: %s' % ', '.join(results['instr'][sc]))
+
+	print('\n\n\t==== WMI QUERIES ====\n')
+	for wmi in results['wmi']:
+		if wmi['patched'] != '':
+			print('Query: %s\n Patched with: %s\n' % (wmi['query'], wmi['patched']))
+		else:
+			print('Query: %s\n' % wmi['query'])
+
+	print('\n\n\t==== URL ====\n')
+	print('\n'.join(results['urls']))
+
+	print('\n\n\t==== PROCESS CREATION ====\n')
+
+	for proc in results['procs']:
+		print('Cmd: %s\nApp: %s' % proc['cmd'])
 
 
 class EventHandler(EventHandler):
@@ -197,9 +303,15 @@ class EventHandler(EventHandler):
 					if address:
 						event.debug.break_at(pid, address, callback)
 					else:
-						logger.warning("Couldn't resolve or address not belong to module: %s!%s" % (modulename, function))
+						print("Couldn't resolve or address not belong to module: %s!%s" % (modulename, function))
+						while True:
+							choice = raw_input('Continue anyway? (y/n): ')
+							if choice == 'y':
+								break
+							elif choice == 'n':
+								sys.exit()
 				except:
-					logger.error('Could not break at: %s!%s.' % (modulename, function))
+					print('Could not break at: %s!%s.' % (modulename, function))
 					while True:
 						choice = raw_input('Continue anyway? (y/n): ')
 						if choice == 'y':
@@ -220,7 +332,7 @@ class EventHandler(EventHandler):
 			if proc.get_bits() == 32:
 				setup_breakpoint('vbe7', '0x2242E3', cb_vbastrcmp)
 			else:
-				# offset needed
+				i=1# offset needed
 
 		elif version == 'Office15': # Office 2013
 			if proc.get_bits() == 32:
@@ -242,7 +354,7 @@ def options():
 
 	usage = '''
 	%prog [options] <type> <exit-on> <filename>
-	
+
 Type:
 	auto   - Automatically detect program to launch
 	word   - Word document
@@ -267,19 +379,19 @@ Exit-on:
 		sys.exit(0)
 
 	if not os.path.exists(opts.path):
-		logger.error('Specified Office path does not exists: "%s"' % opts.path)
+		print('Specified Office path does not exists: "%s"' % opts.path)
 		sys.exit(1)
 
 	if args[0] not in valid_types:
-		logger.error('Specified <type> is not recognized: "%s".' % args[0])
+		print('Specified <type> is not recognized: "%s".' % args[0])
 		sys.exit(1)
 
 	if args[1] not in valid_exit_ons:
-		logger.error('Specified <exit-on> is not recognized: "%s".' % args[1])
+		print('Specified <exit-on> is not recognized: "%s".' % args[1])
 		sys.exit(1)
 
 	if not os.path.isfile(args[2]):
-		logger.error('Specified file to analyse does not exists: "%s"' % args[2])
+		print('Specified file to analyse does not exists: "%s"' % args[2])
 		sys.exit(1)
 
 	if opts.verbose:
@@ -314,7 +426,7 @@ def setup_office_path(prog, filename, office_path):
 
 		# Stage 2: Detect based on extension
 		if p == None:
-			logger.debug('Could not detect type via mimetype')
+			logger.info('Could not detect type via mimetype')
 			word = ['doc', 'docx', 'docm', 'dot', 'dotx', 'docb', 'dotm']
 			#word_patterns = ['MSWordDoc', 'Word.Document', 'word/_rels/document', 'word/font']
 			excel = ['xls', 'xlsx', 'xlsm', 'xlt', 'xlm', 'xltx', 'xltm', 'xlsb', 'xla', 'xlw', 'xlam']
@@ -332,10 +444,10 @@ def setup_office_path(prog, filename, office_path):
 						p = detect_ext(script, 'system32\\wscript')
 		
 		if p == None:
-			logger.error('Failed to detect file\'s type!')
+			print('Failed to detect file\'s type!')
 			sys.exit(1)
 
-		logger.debug('Auto-detected program to launch: "%s.exe"' % p)
+		logger.info('Auto-detected program to launch: "%s.exe"' % p)
 		return '%s\\%s.exe' % (office_path, p)
 	
 	elif prog == 'script':
@@ -359,24 +471,25 @@ if __name__ == "__main__":
 	filename = args[2]
 	writes_only = opts.writes_only
 	
-	logger.info('\n\tLazy Office Analyzer - Analyze documents with WinDbg\n')
+	warnings.filterwarnings('ignore')
+	print('\n\t\tLazy Office Analyzer\n')
 
 	office_invoke = []
 	office_invoke.append(setup_office_path(prog, filename, opts.path))
 
-	logger.debug('Using office path:')
-	logger.debug('\t"%s"' % office_invoke[0])
+	logger.info('Using office path: "%s"' % office_invoke[0])
 		
 	office_invoke.append(filename) # Document to analyze
 
-	logger.debug('Invocation command:')
-	logger.debug('\t"%s"' % ' '.join(office_invoke))
+	logger.info('Invocation command: "%s"' % ' '.join(office_invoke))
 
 	with Debug(EventHandler(), bKillOnExit = True) as debug:
 		debug.execv(office_invoke)
 		try:
-			logger.debug('Launching...')
+			logger.info('Launching...')
 			debug.loop()
 		except KeyboardInterrupt:
-			logger.info('Exiting, bye!')
+			print('\nExiting, bye! Summary below...')
 			pass
+	save_and_display_results()
+	print('Goodbye...\n')
