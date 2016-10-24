@@ -16,6 +16,8 @@ from winappdbg import Debug, EventHandler
 from time import strftime, gmtime
 import os
 import sys
+import random
+import string
 import logging
 import warnings
 import optparse
@@ -282,7 +284,64 @@ def save_and_display_results():
 	print('\n\n\t==== PROCESS CREATION ====\n')
 
 	for proc in results['procs']:
-		print('Cmd: %s\nApp: %s' % proc['cmd'])
+		print('Cmd: %s\nApp: %s' % (proc['cmd'], proc['app']))
+
+
+def randomString():
+	return ''.join(random.choice(string.ascii_uppercase + string.digits + string.ascii_lowercase) for _ in range(random.randint(5,15)))
+
+def checkRecentDocuments():
+
+	# Check number of Recent Documents (add fakes if needed)
+
+	def addDocuments(existing, fakes):
+
+		version = DEFAULT_OFFICE_PATH[-2:]
+		apps = ['Word', 'Excel', 'PowerPoint']
+
+		for app in apps:
+			try:
+				hKey = _winreg.OpenKey(_winreg.HKEY_CURRENT_USER, 'Software\\Microsoft\\Office\\%s.0\\%s\\File MRU' % (version, app), 0, _winreg.KEY_SET_VALUE)
+			except:
+				hKey = _winreg.CreateKey(_winreg.HKEY_CURRENT_USER, 'Software\\Microsoft\\Office\\%s.0\\%s\\File MRU' % (version, app))
+
+			if existing <= 0:
+				existing = 1
+
+			for i in xrange(existing, fakes):
+				name = randomString()
+				_winreg.SetValueEx(hKey, 'Item %d' % i, 0, _winreg.REG_SZ, '[F00000000][T01D228AEF15B51C0][O00000000]*C:\\Documents\\%s.doc' % name)
+
+			hKey.Close()
+
+
+	try:
+		import _winreg
+	except ImportError:
+		print('Can\'t import _winreg (needed for evasion)')
+
+	version = DEFAULT_OFFICE_PATH[-2:]
+	apps = ['Word', 'Excel', 'PowerPoint']
+
+	for app in apps:
+		try:
+			hKey = _winreg.OpenKey(_winreg.HKEY_CURRENT_USER, 'SOFTWARE\\Microsoft\\Office\\%s.0\\%s\\File MRU' % (version, app))
+			recent = _winreg.QueryInfoKey(hKey)[1] - 1 # Get number of recent documents
+			hKey.Close()
+		except:
+			recent = 0
+
+		fakes = random.randint(10, 15)
+		if recent < 3:
+			while True:
+				choice = raw_input('Recent docs < 3:\nWant to add some more, like %d fake ones (for Word, Excel & PowerPoint)? (y/n) ' % fakes)
+				if choice == 'y':
+					addDocuments(recent, fakes)
+					print('Fakes added, moving on :)\n')
+					return
+				elif choice == 'n':
+					print('Aight, but be aware that the macro might not run as expected... :(\n')
+					return
 
 
 class EventHandler(EventHandler):
@@ -332,7 +391,7 @@ class EventHandler(EventHandler):
 			if proc.get_bits() == 32:
 				setup_breakpoint('vbe7', '0x2242E3', cb_vbastrcmp)
 			else:
-				i=1# offset needed
+				i=1 # offset needed
 
 		elif version == 'Office15': # Office 2013
 			if proc.get_bits() == 32:
@@ -342,7 +401,7 @@ class EventHandler(EventHandler):
 
 		elif version == 'Office16':
 			if proc.get_bits() == 32:
-				i=1# offset needed
+				i=1 # offset needed
 			else:
 				setup_breakpoint('vbe7', '0x35A909', cb_vbastrcmp)
 
@@ -487,9 +546,10 @@ if __name__ == "__main__":
 		debug.execv(office_invoke)
 		try:
 			logger.info('Launching...')
+			checkRecentDocuments()
 			debug.loop()
 		except KeyboardInterrupt:
-			print('\nExiting, bye! Summary below...')
+			print('\nExiting, summary below...')
 			pass
 	save_and_display_results()
 	print('Goodbye...\n')
