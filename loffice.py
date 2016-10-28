@@ -12,10 +12,12 @@ Author: @tehsyntx
 """
 
 from __future__ import print_function
+from capstone import Cs, CS_MODE_32, CS_MODE_64, CS_ARCH_X86
 from winappdbg import Debug, EventHandler
 from time import strftime, gmtime
 import os
 import sys
+import pefile
 import random
 import string
 import logging
@@ -214,7 +216,7 @@ def cb_stubclient24(event):
 	print_stats()
 
 
-def cb_vbastrcmp(event):
+def cb_vbeinstr(event):
 
 	# str1: search for string
 	# str2: string to search in
@@ -343,6 +345,46 @@ def checkRecentDocuments():
 					print('Aight, but be aware that the macro might not run as expected... :(\n')
 					return
 
+def find_instr_addr(mod_name, bits):
+
+	dll = pefile.PE(mod_name)
+
+	for entry in dll.DIRECTORY_ENTRY_EXPORT.symbols:
+		if entry.name == 'rtcInStrChar':
+			exp_addr = entry.address
+			break
+
+	for imp in dll.DIRECTORY_ENTRY_IMPORT:
+		for entry in imp.imports:
+			if entry.name == 'SysFreeString':
+				imp_addr = entry.address
+				break
+
+	memory = dll.get_memory_mapped_image()
+
+	if bits == 32:
+		dsm = Cs(CS_ARCH_X86, CS_MODE_32)
+	else:
+		dsm = Cs(CS_ARCH_X86, CS_MODE_64)
+
+	for op in dsm.disasm(memory[exp_addr:exp_addr + 0xA0], (exp_addr + dll.OPTIONAL_HEADER.ImageBase)):
+		if op.mnemonic == 'call':
+			last_call = op.op_str[2:]
+		if op.mnemonic == 'ret':
+			break
+
+	next_func = int(last_call, 16) - dll.OPTIONAL_HEADER.ImageBase
+
+	calls = 0
+	call_free = 0
+	for op in dsm.disasm(memory[next_func:next_func + 0x300], (next_func + dll.OPTIONAL_HEADER.ImageBase)):
+		if op.mnemonic == 'call' and ('0x%x' % imp_addr in op.op_str or 'qword ptr' in op.op_str):
+			call_free += 1
+		if call_free == 2:
+			return last_call
+		if op.mnemonic == 'call':
+			last_call = op.address - dll.OPTIONAL_HEADER.ImageBase
+
 
 class EventHandler(EventHandler):
 
@@ -354,8 +396,8 @@ class EventHandler(EventHandler):
 
 		def setup_breakpoint(modulename, function, callback):
 			if module.match_name(modulename + '.dll'):
-				if function[:2] == '0x':
-					address = module.lpBaseOfDll + int(function[2:], 16)
+				if isinstance(function, long):
+					address = module.lpBaseOfDll + function
 				else:
 					address = module.resolve(function)
 				try:
@@ -385,25 +427,9 @@ class EventHandler(EventHandler):
 		setup_breakpoint('ole32', 'ObjectStublessClient20', cb_stubclient20)
 		setup_breakpoint('ole32', 'ObjectStublessClient24', cb_stubclient24)
 
-		version = DEFAULT_OFFICE_PATH.split('\\')[-1]
-
-		if version == 'Office14': # Office 2010
-			if proc.get_bits() == 32:
-				setup_breakpoint('vbe7', '0x2242E3', cb_vbastrcmp)
-			else:
-				i=1 # offset needed
-
-		elif version == 'Office15': # Office 2013
-			if proc.get_bits() == 32:
-				setup_breakpoint('vbe7', '0x1FA521', cb_vbastrcmp)
-			#else:
-				# offset needed...
-
-		elif version == 'Office16':
-			if proc.get_bits() == 32:
-				i=1 # offset needed
-			else:
-				setup_breakpoint('vbe7', '0x35A909', cb_vbastrcmp)
+		if module.match_name('vbe7.dll'):
+			instr_addr = find_instr_addr(module.get_filename(), proc.get_bits())
+			setup_breakpoint('vbe7', instr_addr, cb_vbeinstr)
 
 
 def options():
