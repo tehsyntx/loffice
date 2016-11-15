@@ -14,6 +14,7 @@ Anti-analysis via WMI, for example detecting running processes or installed soft
 Loffice have three different exit-modes which determine if execution is to be aborted:
 - url - Exit when the first URL is found
 - proc - Exit if a new process is to be created
+- thread - Before resuming a suspended thread (RunPE style)
 - none - Do not interupt execution, URL and file information will still be printed.
  
 It will also give an insight if there is any evasion/sandbox detection going on by checking string comparisons and logging everything to file located in the "logs" directory.
