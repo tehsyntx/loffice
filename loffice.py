@@ -7,14 +7,16 @@ Requirements:
 - Microsoft Office
 - WinDbg - https://msdn.microsoft.com/en-us/windows/hardware/hh852365
 - WinAppDbg - http://winappdbg.sourceforge.net/
+- pefile - https://github.com/erocarrera/pefile
+- capstone - https://pypi.python.org/pypi/capstone-windows
 
 Author: @tehsyntx
 """
 
 from __future__ import print_function
-from capstone import Cs, CS_MODE_32, CS_MODE_64, CS_ARCH_X86
 from winappdbg import Debug, EventHandler
 from time import strftime, gmtime
+from capstone import Cs, CS_MODE_32, CS_MODE_64, CS_ARCH_X86
 import os
 import sys
 import pefile
@@ -64,7 +66,7 @@ def cb_crackurl(event):
 
 	if exit_on == 'url':
 		logger.info('Exiting on first URL, bye!')
-		safe_exit()
+		safe_exit('Found a URL, exiting as specified exit mode.\nURL: %s' % url)
 
 	print_stats()
 
@@ -115,29 +117,33 @@ def cb_createprocess(event):
 	thread  = event.get_thread()
 
 	if proc.get_bits() == 32:
-		lpApplicationName, lpCommandLine = thread.read_stack_dwords(4)[2:]
+		args = thread.read_stack_dwords(8)
+		lpApplicationName = args[2]
+		lpCommandLine = args[3]
+		dwCreationFlags = args[7]
 	else:
 		context = thread.get_context()
 		lpApplicationName = context['Rdx']
 		lpCommandLine = context['R8']
+		stack = thread.read_stack_qwords(8)
+		dwCreationFlags = stack[7] & 0xff
 
 	application = proc.peek_string(lpApplicationName, fUnicode=True)
 	cmdline = proc.peek_string(lpCommandLine, fUnicode=True)
 
-	logger.info('CREATE PROCESS')
-	logger.info('App: "%s" Command line: "%s"' % (application, cmdline))
+	logger.info('CreateProcess: App: "%s" Cmd: %s" CreationFlags: 0x%x' % (application, cmdline, dwCreationFlags))
 
-	results['procs'].append({'cmd' : cmdline, 'app' : application})
+	results['procs'].append({'cmd' : cmdline, 'app' : application, 'cflags' : dwCreationFlags})
 
 	print_stats()
 
-	if exit_on == 'url' and 'splwow64' not in application:
+	if exit_on == 'url' and 'splwow64' not in application and dwCreationFlags != 0x4:
 		logger.info('Process created before URL was found, exiting for safety.')
-		sys.exit()
+		safe_exit('A process was created before a URL was found, exiting before losing control')
 
 	if exit_on == 'proc' and 'splwow64' not in application:
 		logger.info('Exiting on process creation, bye!')
-		safe_exit()
+		safe_exit('A process was created, exiting via specified exit mode')
 
 
 def cb_stubclient20(event):
@@ -211,7 +217,7 @@ def cb_stubclient24(event):
 		logger.info('Process creation via WMI detected')
 		if exit_on == 'url' or exit_on == 'proc':
 			logger.info('Exiting for safety')
-			safe_exit()
+			safe_exit('A process tried to be created via WMI')
 
 	print_stats()
 
@@ -247,10 +253,52 @@ def cb_vbeinstr(event):
 	print_stats()
 
 
-def safe_exit():
-	save_and_display_results()
-	print('Exiting for safety...')
+def cb_writeprocessmemory(event):
+
+	global inject
+	inject += 1
+	thread = event.get_thread()
+	proc = event.get_process()
+	if proc.get_bits() == 32:
+		hProc, lpBase, lpBuffer, nSize = thread.read_stack_dwords(5)[1:]
+	else:
+		context = thread.get_context()
+		hProc = context['Rcx']
+		lpBase = context['Rdx']
+		lpBuffer = context['R8']
+		nSize = context['R9']
+		logging.info('WriteProcessMemory: Base: 0x%x, Buf: 0x%x, Size: 0x%x\n' % (lpBase, lpBuffer, nSize))
+
+	logging.info('WriteProcessMemory called, inject = %d, suggests injection is at hand' % inject)
+
+	if 'MZ' in proc.read(lpBuffer, 4):
+		logging.info('Found MZ signature in buffer written to 0x%x' % lpBase)
+
+
+def cb_zwresumethread(event):
+	global inject
+	if inject > 2 and exit_on == 'thread':
+		logging.info('ResumeThread called, inject = %d, shutting down for safety' % inject)
+		safe_exit('ResumeThread called, inject > 2, possible code injection.\nCheck for a suspended process')
+
+
+def cb_getthreadcontext(event):
+	global inject
+	inject += 1
+	logging.info('GetThreadContext called, inject = %d, suggests injection is at hand' % inject)
+
+
+def cb_setthreadcontext(event):
+	global inject
+	inject += 1
+	logger.info('SetThreadContext called, inject = %d, suggests injection is at hand' % inject)
+
+
+def safe_exit(reason):
 	logger.info('Exiting for safety...')
+	display_summary()
+	print('\n\nExiting for safety: %s' % reason)
+	print('Remember to check the runtime log in the "logs" directory')
 	sys.exit()
 
 
@@ -262,7 +310,7 @@ def print_stats():
 		print(msg, end='')
 
 
-def save_and_display_results():
+def display_summary():
 
 	print('\n\n\t==== FILE HANDLES OPENED ====\n')
 	for fname in results['filehandle'].keys():
@@ -286,11 +334,12 @@ def save_and_display_results():
 	print('\n\n\t==== PROCESS CREATION ====\n')
 
 	for proc in results['procs']:
-		print('Cmd: %s\nApp: %s' % (proc['cmd'], proc['app']))
+		print('Cmd: %s\nApp: %s\nCreationFlags: 0x%x' % (proc['cmd'], proc['app'], proc['cflags']))
 
 
 def randomString():
 	return ''.join(random.choice(string.ascii_uppercase + string.digits + string.ascii_lowercase) for _ in range(random.randint(5,15)))
+
 
 def checkRecentDocuments():
 
@@ -345,6 +394,7 @@ def checkRecentDocuments():
 					print('Aight, but be aware that the macro might not run as expected... :(\n')
 					return
 
+
 def find_instr_addr(mod_name, bits):
 
 	dll = pefile.PE(mod_name)
@@ -361,7 +411,6 @@ def find_instr_addr(mod_name, bits):
 				break
 
 	memory = dll.get_memory_mapped_image()
-
 	if bits == 32:
 		dsm = Cs(CS_ARCH_X86, CS_MODE_32)
 	else:
@@ -369,21 +418,22 @@ def find_instr_addr(mod_name, bits):
 
 	for op in dsm.disasm(memory[exp_addr:exp_addr + 0xA0], (exp_addr + dll.OPTIONAL_HEADER.ImageBase)):
 		if op.mnemonic == 'call':
-			last_call = op.op_str[2:]
+			last_call = op.op_str
 		if op.mnemonic == 'ret':
 			break
-
 	next_func = int(last_call, 16) - dll.OPTIONAL_HEADER.ImageBase
-
 	calls = 0
 	call_free = 0
-	for op in dsm.disasm(memory[next_func:next_func + 0x300], (next_func + dll.OPTIONAL_HEADER.ImageBase)):
+	for op in dsm.disasm(memory[next_func:next_func + 0x200], (next_func + dll.OPTIONAL_HEADER.ImageBase)):
+
 		if op.mnemonic == 'call' and ('0x%x' % imp_addr in op.op_str or 'qword ptr' in op.op_str):
 			call_free += 1
-		if call_free == 2:
+		if call_free > 2:
 			return last_call
 		if op.mnemonic == 'call':
 			last_call = op.address - dll.OPTIONAL_HEADER.ImageBase
+		if op.mnemonic == 'ret':
+			return
 
 
 class EventHandler(EventHandler):
@@ -395,6 +445,7 @@ class EventHandler(EventHandler):
 		pid = event.get_pid()
 
 		def setup_breakpoint(modulename, function, callback):
+
 			if module.match_name(modulename + '.dll'):
 				if isinstance(function, long):
 					address = module.lpBaseOfDll + function
@@ -420,6 +471,11 @@ class EventHandler(EventHandler):
 						elif choice == 'n':
 							sys.exit()
 
+
+		setup_breakpoint('ntdll', 'ZwResumeThread', cb_zwresumethread)
+		setup_breakpoint('kernel32', 'GetThreadContext', cb_getthreadcontext)
+		setup_breakpoint('kernel32', 'SetThreadContext', cb_setthreadcontext)
+		setup_breakpoint('kernel32', 'WriteProcessMemory', cb_writeprocessmemory)
 		setup_breakpoint('kernel32', 'CreateProcessInternalW', cb_createprocess)
 		setup_breakpoint('kernel32', 'CreateFileW', cb_createfilew)
 		setup_breakpoint('wininet', 'InternetCrackUrlW', cb_crackurl)
@@ -435,7 +491,7 @@ class EventHandler(EventHandler):
 def options():
 
 	valid_types = ['auto', 'word', 'excel', 'power', 'script']
-	valid_exit_ons = ['url', 'proc', 'none']
+	valid_exit_ons = ['url', 'proc', 'thread', 'none']
 
 	usage = '''
 	%prog [options] <type> <exit-on> <filename>
@@ -450,7 +506,9 @@ Type:
 Exit-on:
 	url  - After first URL extraction (no remote fetching)
 	proc - Before process creation (allow remote fetching)
+	thread - Before resuming a suspended thread (RunPE style)
 	none - Allow uniterupted execution (dangerous)
+
 '''
 	parser = optparse.OptionParser(usage=usage)
 	parser.add_option('-v', '--verbose', dest='verbose', help='Verbose mode.', action='store_true')
@@ -488,7 +546,7 @@ Exit-on:
 
 
 def setup_office_path(prog, filename, office_path):
-
+	# TODO: rewrite the whole function
 	def detect_ext(exts, type_):
 		for ext in exts:
 			if filename.endswith('.' + ext):
@@ -527,14 +585,12 @@ def setup_office_path(prog, filename, office_path):
 					p = detect_ext(ppt, 'POWERPNT')
 					if not p:
 						p = detect_ext(script, 'system32\\wscript')
-		
-		if p == None:
-			print('Failed to detect file\'s type!')
-			sys.exit(1)
+			if p == None:
+				print('Failed to detect file\'s type!')
+				sys.exit(1)
 
 		logger.info('Auto-detected program to launch: "%s.exe"' % p)
 		return '%s\\%s.exe' % (office_path, p)
-	
 	elif prog == 'script':
 		return '%s\\system32\\wscript.exe' % os.environ['WINDIR']
 	elif prog == 'word':
@@ -547,6 +603,7 @@ def setup_office_path(prog, filename, office_path):
 
 if __name__ == "__main__":
 
+	global inject
 	global exit_on
 	global writes_only
 
@@ -555,21 +612,26 @@ if __name__ == "__main__":
 	exit_on = args[1]
 	filename = args[2]
 	writes_only = opts.writes_only
-	
-	warnings.filterwarnings('ignore')
+	inject = 0 
 	print('\n\t\tLazy Office Analyzer\n')
 
 	office_invoke = []
 	office_invoke.append(setup_office_path(prog, filename, opts.path))
 
 	logger.info('Using office path: "%s"' % office_invoke[0])
-		
 	office_invoke.append(filename) # Document to analyze
 
 	logger.info('Invocation command: "%s"' % ' '.join(office_invoke))
 
 	with Debug(EventHandler(), bKillOnExit = True) as debug:
-		debug.execv(office_invoke)
+		try:
+			debug.execv(office_invoke)
+		except Exception, e:
+			if not os.path.exists(office_invoke[0]):
+				print('Error launching application (%s), correct Office path?' % prog)
+			else:
+				print('Error launching: %s' % str(e))
+			sys.exit()
 		try:
 			logger.info('Launching...')
 			checkRecentDocuments()
@@ -577,5 +639,6 @@ if __name__ == "__main__":
 		except KeyboardInterrupt:
 			print('\nExiting, summary below...')
 			pass
-	save_and_display_results()
+	display_summary()
+	print('Remember to check the runtime log in the "logs" directory')
 	print('Goodbye...\n')
