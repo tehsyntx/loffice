@@ -428,7 +428,7 @@ def find_instr_addr(mod_name, bits):
 
 		if op.mnemonic == 'call' and ('0x%x' % imp_addr in op.op_str or 'qword ptr' in op.op_str):
 			call_free += 1
-		if call_free > 2:
+		if call_free == 2:
 			return last_call
 		if op.mnemonic == 'call':
 			last_call = op.address - dll.OPTIONAL_HEADER.ImageBase
