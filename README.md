@@ -6,6 +6,8 @@ Requirements:
 - WinAppDbg - http://winappdbg.sourceforge.net/
 - Python 2.7 
 - pefile - https://github.com/erocarrera/pefile
+
+Optional:
 - capstone - https://pypi.python.org/pypi/capstone-windows
 
 Loffice is making use of WinAppDbg to extract URLs' from Office documents but also VB-script and Javascript. By setting strategical breakpoints it's possible to neutralize obfuscation and get the URL and file destination.

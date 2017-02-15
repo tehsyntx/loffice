@@ -16,7 +16,6 @@ Author: @tehsyntx
 from __future__ import print_function
 from winappdbg import Debug, EventHandler
 from time import strftime, gmtime
-from capstone import Cs, CS_MODE_32, CS_MODE_64, CS_ARCH_X86
 import os
 import sys
 import pefile
@@ -26,6 +25,14 @@ import logging
 import warnings
 import optparse
 import mimetypes
+try:
+	from capstone import Cs, CS_MODE_32, CS_MODE_64, CS_ARCH_X86
+	capstone = True
+except ImportError:
+	print('Could not import capstone, insight to antis limimted')
+	capstone = False
+
+
 
 # Setting up logger facilities.
 if not os.path.exists('%s\\logs' % os.getcwd()):
@@ -256,6 +263,7 @@ def cb_vbeinstr(event):
 def cb_writeprocessmemory(event):
 
 	global inject
+	sample_name = sys.argv[-1].split('\\')[-1]
 	inject += 1
 	thread = event.get_thread()
 	proc = event.get_process()
@@ -267,9 +275,17 @@ def cb_writeprocessmemory(event):
 		lpBase = context['Rdx']
 		lpBuffer = context['R8']
 		nSize = context['R9']
-		logging.info('WriteProcessMemory: Base: 0x%x, Buf: 0x%x, Size: 0x%x\n' % (lpBase, lpBuffer, nSize))
 
-	logging.info('WriteProcessMemory called, inject = %d, suggests injection is at hand' % inject)
+	logging.info('WriteProcessMemory: Base: 0x%x, Buf: 0x%x, Size: 0x%x\n' % (lpBase, lpBuffer, nSize))
+	logging.info('WriteProcessMemory called, inject = %d, suggests injection is at hand, dumping to disk' % inject)
+
+	if not os.path.isdir('%s\\logs\\%s' % (os.getcwd(), sample_name)):
+		os.mkdir('%s\\logs\\%s' % (os.getcwd(), sample_name))
+
+	output = '%s\\logs\\%s\\WriteProcessMemory_0x%x_%dbytes.bin' % (os.getcwd(), sample_name, lpBase, nSize)
+	buffer = proc.read(lpBuffer, nSize)
+
+	open(output, 'wb').write(buffer)
 
 	if 'MZ' in proc.read(lpBuffer, 4):
 		logging.info('Found MZ signature in buffer written to 0x%x' % lpBase)
@@ -425,7 +441,6 @@ def find_instr_addr(mod_name, bits):
 	calls = 0
 	call_free = 0
 	for op in dsm.disasm(memory[next_func:next_func + 0x200], (next_func + dll.OPTIONAL_HEADER.ImageBase)):
-
 		if op.mnemonic == 'call' and ('0x%x' % imp_addr in op.op_str or 'qword ptr' in op.op_str):
 			call_free += 1
 		if call_free == 2:
@@ -483,7 +498,7 @@ class EventHandler(EventHandler):
 		setup_breakpoint('ole32', 'ObjectStublessClient20', cb_stubclient20)
 		setup_breakpoint('ole32', 'ObjectStublessClient24', cb_stubclient24)
 
-		if module.match_name('vbe7.dll'):
+		if module.match_name('vbe7.dll') and capstone:
 			instr_addr = find_instr_addr(module.get_filename(), proc.get_bits())
 			setup_breakpoint('vbe7', instr_addr, cb_vbeinstr)
 
